@@ -1,0 +1,48 @@
+{
+  "name": "onboarding-service",
+  "version": "1.0.0",
+  "description": "Dedicated microservice for handling customer onboarding workflows",
+  "main": "dist/server.js",
+  "scripts": {
+    "start": "node dist/server.js",
+    "dev": "nodemon src/server.ts",
+    "dev:simple": "nodemon src/simple-server.ts",
+    "dev:mock": "nodemon src/mock-server.ts",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "echo \"Linting not configured\"",
+    "health": "curl http://localhost:3004/health"
+  },
+  "keywords": [
+    "onboarding",
+    "microservice",
+    "customer",
+    "workflow"
+  ],
+  "author": "OMS Team",
+  "license": "ISC",
+  "dependencies": {
+    "bullmq": "^5.58.5",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "mongodb": "^6.19.0",
+    "pg": "^8.16.3",
+    "redis": "^5.8.2"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/mongodb": "^4.0.6",
+    "@types/node": "^24.3.3",
+    "@types/pg": "^8.11.10",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
