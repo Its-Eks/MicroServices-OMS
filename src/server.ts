@@ -57,6 +57,16 @@ class OnboardingServer {
 
     // API routes
     this.app.use('/api/onboarding', this.onboardingController.getRouter());
+
+    // Queue stats endpoint
+    this.app.get('/api/queues/stats', async (req, res) => {
+      try {
+        const stats = await this.queueService.getQueueStats();
+        res.json({ success: true, stats });
+      } catch (error: any) {
+        res.status(500).json({ success: false, error: { message: error.message } });
+      }
+    });
     
     // Webhook endpoints
     this.app.post('/webhooks/email', this.onboardingController.handleEmailWebhook.bind(this.onboardingController));
