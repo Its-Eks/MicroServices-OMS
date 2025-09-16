@@ -129,6 +129,58 @@ export class OnboardingService {
     private queueService: QueueService
   ) {}
 
+  async getActiveOnboardings(): Promise<OnboardingData[]> {
+    const result = await this.dbService.query(
+      `SELECT id, customer_id, order_id, onboarding_type, current_step, completion_percentage, assigned_to, started_at
+       FROM customer_onboarding
+       WHERE completed_at IS NULL
+       ORDER BY started_at DESC`
+    );
+    return result.rows.map((row: DatabaseRow) => ({
+      id: row.id,
+      customerId: row.customer_id,
+      orderId: row.order_id,
+      onboardingType: row.onboarding_type,
+      currentStep: row.current_step,
+      completionPercentage: row.completion_percentage,
+      assignedTo: row.assigned_to,
+      startedAt: row.started_at,
+    }));
+  }
+
+  async assignOnboarding(onboardingId: string, assignedTo: string): Promise<void> {
+    await this.dbService.query(
+      'UPDATE customer_onboarding SET assigned_to = $1 WHERE id = $2',
+      [assignedTo, onboardingId]
+    );
+  }
+
+  async notifyOnboarding(
+    onboardingId: string,
+    opts: { type: 'welcome' | 'reminder' | 'completion' | 'trial-expiry'; template?: string; variables?: any; email?: string }
+  ): Promise<void> {
+    // Fetch email if not provided
+    let email = opts.email as string | undefined;
+    if (!email) {
+      const r = await this.dbService.query(
+        `SELECT c.email, co.customer_id
+           FROM customer_onboarding co
+           JOIN customers c ON c.id = co.customer_id
+          WHERE co.id = $1`,
+        [onboardingId]
+      );
+      email = r.rows[0]?.email;
+    }
+
+    await this.queueService.addEmailJob({
+      type: opts.type,
+      email: email || '',
+      customerId: 'unknown',
+      template: opts.template || opts.type,
+      variables: opts.variables || {},
+    });
+  }
+
   async createCustomer(request: CreateCustomerRequest): Promise<DatabaseRow> {
     try {
       // Insert into customers table; customer_number generated here
@@ -328,7 +380,6 @@ export class OnboardingService {
         `UPDATE customer_onboarding 
          SET current_step = $1, 
              completion_percentage = LEAST(100, completion_percentage + $2),
-             updated_at = NOW(),
              notes = COALESCE($3, notes)
          WHERE id = $4`,
         [

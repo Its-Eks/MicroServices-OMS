@@ -26,12 +26,36 @@ export class QueueService {
   private onboardingWorker!: Worker<OnboardingJobData>;
   private emailWorker!: Worker<EmailJobData>;
   private isInitialized = false;
+  private bullConnectionOptions: any;
 
   constructor(private dbService: DatabaseService) {
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    const parsed = new URL(redisUrl);
+    const password = decodeURIComponent(parsed.password || '');
+    const host = parsed.hostname || 'localhost';
+    const port = parsed.port ? parseInt(parsed.port, 10) : 6379;
+    const isTls = parsed.protocol === 'rediss:';
+
+    this.redis = new Redis({
+      host,
+      port,
+      password: password || undefined,
       retryDelayOnFailover: 100,
-      maxRetriesPerRequest: 3,
+      // Required by BullMQ to allow blocking ops
+      maxRetriesPerRequest: null as unknown as number,
+      tls: isTls ? {} : undefined,
     } as any);
+
+    // Connection options passed directly to BullMQ so its internal
+    // clients also have maxRetriesPerRequest=null and AUTH
+    this.bullConnectionOptions = {
+      host,
+      port,
+      password: password || undefined,
+      maxRetriesPerRequest: null as unknown as number,
+      enableOfflineQueue: false,
+      tls: isTls ? {} : undefined,
+    } as any;
   }
 
   async initialize(): Promise<void> {
@@ -42,7 +66,7 @@ export class QueueService {
 
       // Create queues
       this.onboardingQueue = new Queue<OnboardingJobData>('onboarding', {
-        connection: this.redis,
+        connection: this.bullConnectionOptions,
         defaultJobOptions: {
           removeOnComplete: 100,
           removeOnFail: 50,
@@ -55,7 +79,7 @@ export class QueueService {
       });
 
       this.emailQueue = new Queue<EmailJobData>('email', {
-        connection: this.redis,
+        connection: this.bullConnectionOptions,
         defaultJobOptions: {
           removeOnComplete: 50,
           removeOnFail: 25,
@@ -111,7 +135,7 @@ export class QueueService {
         }
       },
       {
-        connection: this.redis,
+        connection: this.bullConnectionOptions,
         concurrency: 5,
       }
     );
@@ -127,7 +151,7 @@ export class QueueService {
         await this.processEmailJob(type, email, template, variables);
       },
       {
-        connection: this.redis,
+        connection: this.bullConnectionOptions,
         concurrency: 10,
       }
     );
@@ -145,7 +169,8 @@ export class QueueService {
   // Queue job methods
   async addOnboardingJob(data: OnboardingJobData, delay?: number): Promise<void> {
     if (!this.isInitialized) {
-      throw new Error('Queue service not initialized');
+      console.warn('Queue service not initialized; skipping onboarding job enqueue', data);
+      return;
     }
 
     const jobOptions: any = {};
@@ -158,7 +183,8 @@ export class QueueService {
 
   async addEmailJob(data: EmailJobData, delay?: number): Promise<void> {
     if (!this.isInitialized) {
-      throw new Error('Queue service not initialized');
+      console.warn('Queue service not initialized; skipping email job enqueue', data);
+      return;
     }
 
     const jobOptions: any = {};

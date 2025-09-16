@@ -13,7 +13,10 @@ export class OnboardingController {
   private setupRoutes(): void {
     // Onboarding management
     this.router.post('/initiate', this.initiateOnboarding.bind(this));
+    this.router.get('/active', this.getActiveOnboardings.bind(this));
     this.router.get('/:id', this.getOnboardingStatus.bind(this));
+    this.router.patch('/:id/assign', this.assignOnboarding.bind(this));
+    this.router.post('/:id/notify', this.notifyOnboarding.bind(this));
     this.router.get('/customer/:customerId', this.getCustomerOnboarding.bind(this));
     this.router.put('/:id/step/:stepId', this.updateOnboardingStep.bind(this));
     this.router.get('/:id/steps', this.getOnboardingSteps.bind(this));
@@ -202,6 +205,45 @@ export class OnboardingController {
           code: 'ONBOARDING_STATUS_FETCH_FAILED'
         }
       });
+    }
+  }
+
+  private async getActiveOnboardings(req: Request, res: Response): Promise<void> {
+    try {
+      const list = await this.onboardingService.getActiveOnboardings();
+      res.json({ success: true, data: list, total: list.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: { message: error.message || 'Failed to fetch active onboardings' } });
+    }
+  }
+
+  private async assignOnboarding(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { assignedTo } = req.body;
+      if (!id || !assignedTo) {
+        res.status(400).json({ success: false, error: { message: 'id and assignedTo are required' } });
+        return;
+      }
+      await this.onboardingService.assignOnboarding(id, assignedTo);
+      res.json({ success: true, message: 'Assignment updated' });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: { message: error.message || 'Failed to assign onboarding' } });
+    }
+  }
+
+  private async notifyOnboarding(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { type, template, variables, email } = req.body || {};
+      if (!id || !type) {
+        res.status(400).json({ success: false, error: { message: 'id and type are required' } });
+        return;
+      }
+      await this.onboardingService.notifyOnboarding(id, { type, template, variables, email });
+      res.json({ success: true, message: 'Notification queued' });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: { message: error.message || 'Failed to queue notification' } });
     }
   }
 
