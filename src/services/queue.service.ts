@@ -31,14 +31,18 @@ export class QueueService {
   constructor(private dbService: DatabaseService) {
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
     const parsed = new URL(redisUrl);
+    const rawUsername = decodeURIComponent(parsed.username || '');
     const password = decodeURIComponent(parsed.password || '');
     const host = parsed.hostname || 'localhost';
     const port = parsed.port ? parseInt(parsed.port, 10) : 6379;
     const isTls = parsed.protocol === 'rediss:';
+    // If password is provided but username is empty, Redis 6 ACL often expects username 'default'
+    const username = rawUsername || (password ? 'default' : '');
 
     this.redis = new Redis({
       host,
       port,
+      username: username || undefined,
       password: password || undefined,
       retryDelayOnFailover: 100,
       // Required by BullMQ to allow blocking ops
@@ -51,6 +55,7 @@ export class QueueService {
     this.bullConnectionOptions = {
       host,
       port,
+      username: username || undefined,
       password: password || undefined,
       maxRetriesPerRequest: null as unknown as number,
       enableOfflineQueue: false,

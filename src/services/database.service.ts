@@ -54,8 +54,14 @@ export class DatabaseService {
     // Initialize MongoDB
     this.mongoClient = new MongoClient(config.mongodb.uri);
 
-    // Initialize Redis
+    // Initialize Redis (support username for Redis 6 ACL; if only password present, default username)
+    const rurl = new URL(config.redis.url);
+    const rawUser = decodeURIComponent(rurl.username || '');
+    const rawPass = decodeURIComponent(rurl.password || '');
+    const username = rawUser || (rawPass ? 'default' : '');
     this.redis = new Redis(config.redis.url, {
+      username: username || undefined,
+      password: rawPass || undefined,
       retryDelayOnFailover: config.redis.retryDelayOnFailover,
       maxRetriesPerRequest: config.redis.maxRetriesPerRequest,
       tls: config.redis.url.startsWith('rediss://') ? {} : undefined,
