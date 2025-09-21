@@ -137,6 +137,54 @@ class MockOnboardingServer {
       });
     });
 
+    this.app.get('/api/onboarding/active', (req, res) => {
+      console.log('📋 Mock: Getting active onboardings');
+      
+      res.json({
+        success: true,
+        data: [
+          {
+            id: 'mock-onboarding-1',
+            customerId: 'customer-1',
+            orderId: 'order-1',
+            onboardingType: 'standard',
+            currentStep: 'service-config',
+            completionPercentage: 30,
+            assignedTo: 'ops@company.com',
+            startedAt: new Date(Date.now() - 5 * 86400000).toISOString() // 5 days ago
+          },
+          {
+            id: 'mock-onboarding-2',
+            customerId: 'customer-2',
+            orderId: 'order-2',
+            onboardingType: 'trial',
+            currentStep: 'equipment-delivery',
+            completionPercentage: 60,
+            assignedTo: 'support@company.com',
+            startedAt: new Date(Date.now() - 2 * 86400000).toISOString() // 2 days ago
+          }
+        ],
+        total: 2
+      });
+    });
+
+    this.app.get('/api/onboarding/analytics/overview', (req, res) => {
+      console.log('📊 Mock: Getting onboarding analytics');
+      
+      res.json({
+        success: true,
+        data: {
+          activeOnboarding: 2,
+          completedThisMonth: 5,
+          averageCompletionTime: 7.5, // days
+          completionRate: 85,
+          trialCustomers: 3,
+          trialConversions: 2,
+          conversionRate: 67
+        }
+      });
+    });
+
     this.app.get('/api/onboarding/trial-customers', (req, res) => {
       console.log('👥 Mock: Getting trial customers');
       
@@ -187,6 +235,8 @@ class MockOnboardingServer {
         message: `The endpoint ${req.method} ${req.originalUrl} does not exist`,
         availableEndpoints: [
           'GET /health',
+          'GET /api/onboarding/active',
+          'GET /api/onboarding/analytics/overview',
           'POST /api/onboarding/initiate',
           'GET /api/onboarding/customers/:customerId',
           'POST /api/onboarding/:onboardingId/step/:stepId/complete',
