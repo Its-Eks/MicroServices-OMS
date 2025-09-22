@@ -11,26 +11,30 @@ export class OnboardingController {
   }
 
   private setupRoutes(): void {
-    // Onboarding management
-    this.router.post('/initiate', this.initiateOnboarding.bind(this));
-    this.router.get('/active', this.getActiveOnboardings.bind(this));
-    this.router.get('/:id', this.getOnboardingStatus.bind(this));
-    this.router.patch('/:id/assign', this.assignOnboarding.bind(this));
-    this.router.post('/:id/notify', this.notifyOnboarding.bind(this));
-    this.router.get('/customer/:customerId', this.getCustomerOnboarding.bind(this));
-    this.router.put('/:id/step/:stepId', this.updateOnboardingStep.bind(this));
-    this.router.get('/:id/steps', this.getOnboardingSteps.bind(this));
+    // Define specific/literal routes BEFORE parameterized ":id" routes to avoid conflicts
 
     // Customer creation (hybrid integration support)
     this.router.post('/customers', this.createCustomer.bind(this));
     this.router.get('/customers', this.listCustomers.bind(this));
-    
+
+    // Onboarding management (non-parameterized first)
+    this.router.post('/initiate', this.initiateOnboarding.bind(this));
+    this.router.get('/active', this.getActiveOnboardings.bind(this));
+    this.router.get('/customer/:customerId', this.getCustomerOnboarding.bind(this));
+
     // Trial management
     this.router.get('/trials/list', this.getTrialCustomers.bind(this));
     this.router.post('/trials/:id/convert', this.convertTrialToCustomer.bind(this));
-    
+
     // Analytics
     this.router.get('/analytics/overview', this.getOnboardingAnalytics.bind(this));
+
+    // Parameterized ":id" routes
+    this.router.get('/:id', this.getOnboardingStatus.bind(this));
+    this.router.patch('/:id/assign', this.assignOnboarding.bind(this));
+    this.router.post('/:id/notify', this.notifyOnboarding.bind(this));
+    this.router.put('/:id/step/:stepId', this.updateOnboardingStep.bind(this));
+    this.router.get('/:id/steps', this.getOnboardingSteps.bind(this));
   }
 
   public getRouter(): Router {
