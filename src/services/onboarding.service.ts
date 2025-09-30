@@ -292,7 +292,8 @@ export class OnboardingService {
            co.id, co.customer_id, co.order_id, co.onboarding_type, co.current_step,
            co.completion_percentage, co.assigned_to, co.started_at, co.completed_at, co.notes,
            c.first_name, c.last_name, c.email, c.customer_number,
-           o.order_number, o.service_type, o.service_package
+           o.order_number, o.service_type, o.service_package,
+           o.status AS order_status
          FROM customer_onboarding co
          LEFT JOIN customers c ON co.customer_id = c.id
          LEFT JOIN orders o ON co.order_id = o.id
@@ -305,12 +306,15 @@ export class OnboardingService {
       }
 
       const row = result.rows[0];
+      // Mirror onboarding currentStep from linked order status if present
+      const mirroredStep = row.order_status ? row.order_status : row.current_step;
+
       return {
         id: row.id,
         customerId: row.customer_id,
         orderId: row.order_id,
         onboardingType: row.onboarding_type,
-        currentStep: row.current_step,
+        currentStep: mirroredStep,
         completionPercentage: row.completion_percentage,
         assignedTo: row.assigned_to,
         startedAt: row.started_at,

@@ -1,5 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { OnboardingService } from '../services/onboarding.service';
+import { SlaService } from '../services/sla.service';
 
 export class OnboardingController {
   private router: Router;
@@ -29,6 +30,10 @@ export class OnboardingController {
     // Analytics
     this.router.get('/analytics/overview', this.getOnboardingAnalytics.bind(this));
 
+    // SLA endpoints (unified for orders and onboarding)
+    this.router.get('/sla/order/:orderId', this.getOrderSla.bind(this));
+    this.router.get('/sla/onboarding/:id', this.getOnboardingSla.bind(this));
+
     // Parameterized ":id" routes
     this.router.get('/:id', this.getOnboardingStatus.bind(this));
     this.router.patch('/:id/assign', this.assignOnboarding.bind(this));
@@ -39,6 +44,36 @@ export class OnboardingController {
 
   public getRouter(): Router {
     return this.router;
+  }
+
+  private async getOrderSla(req: Request, res: Response): Promise<void> {
+    try {
+      const { orderId } = req.params as any;
+      if (!orderId) {
+        res.status(400).json({ success: false, error: { message: 'orderId is required' } });
+        return;
+      }
+      const sla = new SlaService((this.onboardingService as any).dbService);
+      const data = await sla.getOrderSla(orderId);
+      res.json({ success: true, data });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: { message: error?.message || 'Failed to compute order SLA' } });
+    }
+  }
+
+  private async getOnboardingSla(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params as any;
+      if (!id) {
+        res.status(400).json({ success: false, error: { message: 'onboarding id is required' } });
+        return;
+      }
+      const sla = new SlaService((this.onboardingService as any).dbService);
+      const data = await sla.getOnboardingSla(id);
+      res.json({ success: true, data });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: { message: error?.message || 'Failed to compute onboarding SLA' } });
+    }
   }
 
   // New: Create customer (lightweight, works in limited/mock mode)
