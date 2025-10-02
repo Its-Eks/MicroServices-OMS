@@ -13,7 +13,8 @@
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "echo \"Linting not configured\"",
-    "health": "curl http://localhost:3004/health"
+    "health": "curl http://localhost:3004/health",
+    "migrate": "node scripts/migrate.js"
   },
   "keywords": [
     "onboarding",
@@ -24,15 +25,20 @@
   "author": "OMS Team",
   "license": "ISC",
   "dependencies": {
+    "@types/nodemailer": "^7.0.2",
+    "axios": "^1.12.2",
     "bullmq": "^5.58.5",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "crypto": "^1.0.1",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.7.0",
     "mongodb": "^6.19.0",
-    "pg": "^8.16.3"
+    "nodemailer": "^7.0.6",
+    "pg": "^8.16.3",
+    "stripe": "^19.0.0"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",

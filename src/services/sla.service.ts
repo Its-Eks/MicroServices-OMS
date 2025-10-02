@@ -48,6 +48,21 @@ const onboardingStepSlaHours: Record<string, number> = {
 export class SlaService {
   constructor(private db: DatabaseService) {}
 
+  private parseUtcDate(input: any): Date | null {
+    if (!input) return null;
+    try {
+      if (input instanceof Date) return input;
+      const s = String(input);
+      // If timestamp has no timezone info, treat it as UTC by appending 'Z'
+      const hasTz = /z$|[\+\-]\d{2}:?\d{2}$/i.test(s);
+      const normalized = hasTz ? s : (s.endsWith('Z') ? s : `${s}Z`);
+      const d = new Date(normalized);
+      return isNaN(d.getTime()) ? null : d;
+    } catch {
+      return null;
+    }
+  }
+
   private computeStatus(elapsed: number, warning: number, breach: number): SlaStatus {
     if (breach <= 0 && warning <= 0) return 'unknown';
     if (elapsed >= breach) return 'breached';
@@ -69,12 +84,12 @@ export class SlaService {
     const rawState: string = (row.current_state || '').toString();
     const state: string = rawState.toLowerCase().trim().replace(/\s+/g, '_');
     const timestamps = {
-      stateChangedAt: row.updated_at ? new Date(row.updated_at) : null,
-      createdAt: row.created_at ? new Date(row.created_at) : null,
+      stateChangedAt: this.parseUtcDate(row.updated_at),
+      createdAt: this.parseUtcDate(row.created_at),
     };
     const basis = timestamps.stateChangedAt || timestamps.createdAt || new Date();
-    const now = new Date();
-    const elapsedHours = Math.max(0, (now.getTime() - basis.getTime()) / 3600000);
+    const nowMs = Date.now();
+    const elapsedHours = Math.max(0, (nowMs - basis.getTime()) / 3600000);
     const isTerminal = state === 'completed' || state === 'cancelled';
     const defaultThresholds = isTerminal ? { warning: 0, breach: 0 } : { warning: 4, breach: 8 };
     const thresholds = orderStateSlaHours[state] || defaultThresholds;
@@ -103,9 +118,9 @@ export class SlaService {
       return await this.getOrderSla(row.order_id);
     }
     const step: string = (row.current_step || '').toString();
-    const basis = row.updated_at ? new Date(row.updated_at) : (row.started_at ? new Date(row.started_at) : new Date());
-    const now = new Date();
-    const elapsedHours = Math.max(0, (now.getTime() - basis.getTime()) / 3600000);
+    const basis = this.parseUtcDate(row.updated_at) || this.parseUtcDate(row.started_at) || new Date();
+    const nowMs = Date.now();
+    const elapsedHours = Math.max(0, (nowMs - basis.getTime()) / 3600000);
     const slaHours = onboardingStepSlaHours[step] ?? 0;
     let status: SlaStatus = 'unknown';
     if (slaHours === 0) status = step === 'completed' ? 'ok' : 'unknown';

@@ -155,7 +155,10 @@ export class OnboardingController {
   // Onboarding Management Endpoints
   private async initiateOnboarding(req: Request, res: Response): Promise<void> {
     try {
-      const { customerId, orderId, onboardingType, assignedTo } = req.body;
+      const { customerId, orderId, onboardingType } = req.body;
+      // Derive assignee: explicit in body, else authenticated user, else x-user-id header
+      const requester = (req as any).user || {};
+      const derivedAssignee = req.body?.assignedTo || requester.userId || requester.id || (req.headers['x-user-id'] as string) || null;
 
       // Validation
       if (!customerId || !onboardingType) {
@@ -184,7 +187,7 @@ export class OnboardingController {
         customerId,
         orderId,
         onboardingType,
-        assignedTo
+        assignedTo: derivedAssignee
       });
 
       res.status(201).json({
