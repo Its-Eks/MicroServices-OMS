@@ -156,6 +156,10 @@ export class DatabaseService {
     return await this.pgPool.connect();
   }
 
+  getPool(): Pool {
+    return this.pgPool;
+  }
+
   // MongoDB methods
   get mongo(): Db {
     if (!this.mongoDb) {

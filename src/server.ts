@@ -7,6 +7,8 @@ import { OnboardingService } from './services/onboarding.service';
 import { QueueService } from './services/queue.service';
 import { DatabaseService } from './services/database.service';
 import { OnboardingController } from './controllers/onboarding.controller';
+import { PaymentController } from './controllers/payment.controller';
+import { serviceAuthMiddleware, serviceCorsPolicyMiddleware } from './middleware/service-auth.middleware';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { requestLogger } from './middleware/logger.middleware';
 
@@ -19,6 +21,7 @@ class OnboardingServer {
   private queueService: QueueService;
   private dbService: DatabaseService;
   private onboardingController: OnboardingController;
+  private paymentController: PaymentController;
 
   constructor() {
     this.app = express();
@@ -27,11 +30,27 @@ class OnboardingServer {
     this.queueService = new QueueService(this.dbService);
     this.onboardingService = new OnboardingService(this.dbService, this.queueService);
     this.onboardingController = new OnboardingController(this.onboardingService);
+    this.paymentController = new PaymentController(this.dbService.getPool());
   }
 
   private setupMiddleware(): void {
     // Security and performance
-    this.app.use(helmet());
+    this.app.use(helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "https:"],
+          fontSrc: ["'self'"],
+          connectSrc: ["'self'"]
+        }
+      }
+    }));
+    // Service-to-service CORS policy
+    this.app.use(serviceCorsPolicyMiddleware);
+    
+    // CORS configuration
     this.app.use(cors({
       origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'],
       credentials: true
@@ -57,6 +76,13 @@ class OnboardingServer {
 
     // API routes
     this.app.use('/api/onboarding', this.onboardingController.getRouter());
+    
+    // Payment routes with selective authentication
+    // Mock checkout pages should be publicly accessible (no auth required)
+    if (process.env.USE_MOCK_PAYMENTS === 'true') {
+      this.app.get('/api/payments/mock-checkout/:checkoutId', this.paymentController.getMockCheckoutPage.bind(this.paymentController));
+    }
+    this.app.use('/api/payments', serviceAuthMiddleware, this.paymentController.router);
 
     // Queue stats endpoint
     this.app.get('/api/queues/stats', async (req, res) => {
