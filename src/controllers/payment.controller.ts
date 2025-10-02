@@ -12,15 +12,23 @@ export class PaymentController {
     this.router = Router();
     
     // Determine if we should use mock data
-    this.useMockData = process.env.PEACH_ENTITY_ID === 'test_entity_id' || 
-                      process.env.PEACH_ACCESS_TOKEN === 'test_access_token' ||
-                      process.env.NODE_ENV === 'development' ||
-                      process.env.USE_MOCK_PAYMENTS === 'true';
+    this.useMockData = process.env.USE_MOCK_PAYMENTS === 'true' ||
+                      !process.env.STRIPE_SECRET_KEY ||
+                      process.env.STRIPE_SECRET_KEY === 'sk_test_your_secret_key';
     
+    // Debug logging
+    console.log('[PaymentController] Configuration check:', {
+      USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS,
+      STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'present' : 'missing',
+      useMockData: this.useMockData
+    });
+
     // Initialize appropriate service
     this.paymentService = this.useMockData 
       ? new MockPaymentService(db)
       : new PaymentService(db);
+
+    console.log(`[PaymentController] Using ${this.useMockData ? 'MOCK' : 'REAL STRIPE'} payment service`);
     
     this.setupRoutes();
   }
@@ -32,7 +40,7 @@ export class PaymentController {
     // Get payment status
     this.router.get('/:paymentLinkId/status', this.getPaymentStatus.bind(this));
     
-    // Peach Payments webhook endpoint
+    // Stripe webhook endpoint
     this.router.post('/webhook', this.handleWebhook.bind(this));
     
     // Resend payment email
@@ -113,24 +121,37 @@ export class PaymentController {
 
   private async handleWebhook(req: Request, res: Response): Promise<void> {
     try {
-      // Peach Payments webhook handling
-      const webhookSecret = process.env.PEACH_WEBHOOK_SECRET;
-      
-      // In production, you should verify the webhook signature
-      // For now, we'll process the webhook data directly
+      // Get Stripe signature from headers
+      const stripeSignature = req.headers['stripe-signature'] as string;
       const webhookData = req.body;
 
-      if (!webhookData.id) {
-        res.status(400).json({ error: 'Invalid webhook data - missing checkout ID' });
+      // For mock payments, handle differently
+      if (this.useMockData) {
+        if (!webhookData.id) {
+          res.status(400).json({ error: 'Invalid webhook data - missing session ID' });
+          return;
+        }
+
+        await this.paymentService.handleWebhook(webhookData);
+        res.json({ 
+          success: true,
+          message: 'Mock webhook processed successfully',
+          sessionId: webhookData.id 
+        });
         return;
       }
 
-      await this.paymentService.handleWebhook(webhookData);
+      // For real Stripe webhooks, verify signature
+      if (!stripeSignature) {
+        res.status(400).json({ error: 'Missing Stripe signature' });
+        return;
+      }
+
+      await this.paymentService.handleWebhook(webhookData, stripeSignature);
 
       res.json({ 
         success: true,
-        message: 'Webhook processed successfully',
-        checkoutId: webhookData.id 
+        message: 'Stripe webhook processed successfully'
       });
     } catch (error: any) {
       console.error('[PaymentController] Webhook handling failed:', error);
