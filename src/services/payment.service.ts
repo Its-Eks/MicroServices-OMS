@@ -191,6 +191,7 @@ export class PaymentService {
       const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
       
       try {
+        // Hosted OMS expects /api/email/send and header x-service-key
         const emailResponse = await axios.post(`${omsServerUrl}/api/email/send`, {
           to: request.customerEmail,
           subject: template.subject,
@@ -723,10 +724,11 @@ Need help? Contact us at support@xnext.co.za
         text: `Payment reminder for order ${payment.order_id}. Please complete your payment: ${payment.url}`
       };
 
-      const emailResponse = await axios.post(`${mainServerUrl}/email/send`, emailData, {
+      // Hosted OMS expects /api/email/send and header x-service-key
+      const emailResponse = await axios.post(`${mainServerUrl}/api/email/send`, emailData, {
         headers: {
           'Content-Type': 'application/json',
-          'x-service-api-key': process.env.ONBOARDING_SERVICE_API_KEY
+          'x-service-key': process.env.ONBOARDING_SERVICE_API_KEY
         },
         timeout: 10000
       });
