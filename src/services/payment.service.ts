@@ -186,13 +186,43 @@ export class PaymentService {
         ? this.getNewInstallationTemplate(request, paymentLink)
         : this.getServiceChangeTemplate(request, paymentLink);
 
-      await this.emailTransporter.sendMail({
-        from: process.env.SMTP_FROM || 'noreply@xnext.co.za',
-        to: request.customerEmail,
-        subject: template.subject,
-        html: template.html,
-        text: template.text
-      });
+      // Use OMS server's email API instead of direct SMTP
+      const omsServerUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
+      const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
+      
+      try {
+        const emailResponse = await axios.post(`${omsServerUrl}/api/email/send`, {
+          to: request.customerEmail,
+          subject: template.subject,
+          html: template.html,
+          text: template.text
+        }, {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-service-key': serviceApiKey
+          },
+          timeout: 10000
+        });
+
+        if (emailResponse.data.success) {
+          console.log(`[PaymentService] Payment email sent successfully via OMS server to ${request.customerEmail}`);
+        } else {
+          throw new Error(`OMS server email failed: ${emailResponse.data.error}`);
+        }
+      } catch (emailError: any) {
+        console.warn('[PaymentService] OMS server email failed, falling back to direct SMTP:', emailError.message);
+        
+        // Fallback to direct SMTP
+        await this.emailTransporter.sendMail({
+          from: process.env.SMTP_FROM || 'noreply@xnext.co.za',
+          to: request.customerEmail,
+          subject: template.subject,
+          html: template.html,
+          text: template.text
+        });
+        
+        console.log(`[PaymentService] Payment email sent via direct SMTP to ${request.customerEmail}`);
+      }
 
       // Log email sent
       await this.db.query(
