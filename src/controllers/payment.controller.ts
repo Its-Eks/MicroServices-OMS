@@ -12,14 +12,18 @@ export class PaymentController {
     this.router = Router();
     
     // Determine if we should use mock data
-    this.useMockData = process.env.USE_MOCK_PAYMENTS === 'true' ||
-                      !process.env.STRIPE_SECRET_KEY ||
-                      process.env.STRIPE_SECRET_KEY === 'sk_test_your_secret_key';
+    // Use mock ONLY if explicitly enabled OR if no valid Stripe key is provided
+    const hasValidStripeKey = process.env.STRIPE_SECRET_KEY && 
+                             process.env.STRIPE_SECRET_KEY !== 'sk_test_your_secret_key' &&
+                             process.env.STRIPE_SECRET_KEY.startsWith('sk_');
+    
+    this.useMockData = process.env.USE_MOCK_PAYMENTS === 'true' || !hasValidStripeKey;
     
     // Debug logging
     console.log('[PaymentController] Configuration check:', {
       USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS,
       STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'present' : 'missing',
+      hasValidStripeKey: hasValidStripeKey,
       useMockData: this.useMockData
     });
 
