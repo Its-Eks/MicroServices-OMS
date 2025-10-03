@@ -634,11 +634,26 @@ Need help? Contact us at support@xnext.co.za
         [true, orderId]
       );
 
-      // Notify order system of payment completion
+      // Notify OMS server of payment completion (service-to-service)
       console.log(`[PaymentService] Payment completed for order ${orderId}, session ${session.id}`);
-      
-      // Here you could trigger the next workflow step
-      // await this.notifyOrderSystem(orderId, 'payment_completed');
+      const omsServerUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
+      const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
+      try {
+        await axios.post(
+          `${omsServerUrl}/orders/${orderId}/payment/success`,
+          { orderId, stripeSessionId: session.id, paidAt: new Date().toISOString() },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'x-service-key': serviceApiKey
+            },
+            timeout: 10000
+          }
+        );
+        console.log(`[PaymentService] OMS notified of payment success for order ${orderId}`);
+      } catch (notifyErr: any) {
+        console.warn('[PaymentService] Failed to notify OMS of payment success:', notifyErr?.message || notifyErr);
+      }
     } catch (error) {
       console.error('[PaymentService] Failed to handle payment success:', error);
     }
