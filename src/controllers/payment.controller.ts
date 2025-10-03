@@ -83,8 +83,12 @@ export class PaymentController {
       // Create payment link
       const paymentLink = await this.paymentService.createPaymentLink(paymentRequest);
 
-      // Send payment email
-      await this.paymentService.sendPaymentEmail(paymentRequest, paymentLink);
+      // Send payment email in background; do not block payment creation on email failures
+      this.paymentService
+        .sendPaymentEmail(paymentRequest, paymentLink)
+        .catch((err: any) => {
+          console.warn('[PaymentController] Non-blocking email send failed:', err?.message || err);
+        });
 
       res.json({
         success: true,
