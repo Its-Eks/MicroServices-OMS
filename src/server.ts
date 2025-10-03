@@ -78,10 +78,15 @@ class OnboardingServer {
     this.app.use('/api/onboarding', this.onboardingController.getRouter());
     
     // Payment routes with selective authentication
+    // Public Stripe webhook (verified with STRIPE_WEBHOOK_SECRET inside controller)
+    this.app.post('/api/payments/webhook', this.paymentController['handleWebhook'].bind(this.paymentController));
+
     // Mock checkout pages should be publicly accessible (no auth required)
     if (process.env.USE_MOCK_PAYMENTS === 'true') {
       this.app.get('/api/payments/mock-checkout/:checkoutId', this.paymentController.getMockCheckoutPage.bind(this.paymentController));
     }
+
+    // All other payment routes require service-to-service authentication
     this.app.use('/api/payments', serviceAuthMiddleware, this.paymentController.router);
 
     // Queue stats endpoint
