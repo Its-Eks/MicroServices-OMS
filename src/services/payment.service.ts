@@ -555,11 +555,12 @@ Need help? Contact us at support@xnext.co.za
           throw new Error('STRIPE_WEBHOOK_SECRET is required for webhook verification');
         }
 
-        event = this.stripe.webhooks.constructEvent(
-          JSON.stringify(webhookData),
-          stripeSignature,
-          webhookSecret
-        );
+        // Use raw Buffer if provided by controller (express.raw), else fall back to JSON string
+        const payload: Buffer | string = Buffer.isBuffer(webhookData) ? (webhookData as Buffer) : JSON.stringify(webhookData);
+        if (!Buffer.isBuffer(payload)) {
+          console.warn('[PaymentService] Warning: webhook payload is not a Buffer; using JSON string fallback');
+        }
+        event = this.stripe.webhooks.constructEvent(payload as any, stripeSignature, webhookSecret);
       } else {
         // For development/testing without signature verification
         event = webhookData as Stripe.Event;
@@ -607,6 +608,85 @@ Need help? Contact us at support@xnext.co.za
     }
   }
 
+  /**
+   * Confirm a Stripe Checkout Session after redirect without requiring frontend auth.
+   */
+  async confirmCheckoutSession(sessionId: string): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    try {
+      if (!sessionId) {
+        return { success: false, error: 'sessionId is required' };
+      }
+
+      // Retrieve session from Stripe
+      const session = await this.stripe.checkout.sessions.retrieve(sessionId);
+      if (!session) {
+        return { success: false, error: 'Session not found' };
+      }
+
+      // Only proceed if paid
+      if (session.payment_status !== 'paid') {
+        return { success: false, error: `Session not paid (status=${session.payment_status})` };
+      }
+
+      // Resolve orderId via DB, then fallback to client_reference_id or metadata
+      let orderId: string | undefined;
+      const result = await this.db.query(
+        'SELECT order_id FROM payment_links WHERE stripe_session_id = $1',
+        [sessionId]
+      );
+      if (result.rows.length > 0) {
+        orderId = result.rows[0].order_id as string;
+      } else {
+        orderId = (session.client_reference_id as string) || (session.metadata?.orderId as string) || undefined;
+      }
+
+      if (!orderId) {
+        return { success: false, error: 'Order not associated with session' };
+      }
+
+      // Idempotent updates
+      await this.db.query(
+        `UPDATE payment_links SET status = 'paid', paid_at = COALESCE(paid_at, NOW()) WHERE stripe_session_id = $1`,
+        [sessionId]
+      );
+      await this.db.query(
+        `UPDATE orders SET is_paid = TRUE, status = 'payment_received', paid_at = COALESCE(paid_at, NOW()), updated_at = NOW() WHERE id = $1`,
+        [orderId]
+      );
+
+      // Notify OMS with retry/backoff (reuse same logic as webhook path)
+      const omsServerUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
+      const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
+      const body = { orderId, stripeSessionId: sessionId, paidAt: new Date().toISOString() };
+      const headers = { 'Content-Type': 'application/json', 'x-service-key': serviceApiKey } as const;
+      const maxRetries = 3;
+      const baseDelayMs = 1000;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          await axios.post(`${omsServerUrl}/orders/${orderId}/payment/success`, body, { headers, timeout: 10000 });
+          console.log(`[PaymentService] OMS notified of payment success (confirm) for order ${orderId}`);
+          break;
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const isTransient = status === 429 || status === 502 || status === 503 || status === 504 || err?.code === 'ECONNRESET' || err?.code === 'ETIMEDOUT' || err?.code === 'ENOTFOUND';
+          if (attempt < maxRetries && isTransient) {
+            const delay = baseDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
+            console.warn(`[PaymentService] Notify OMS (confirm) attempt ${attempt + 1} failed (status: ${status || err?.code}). Retrying in ${delay}ms...`);
+            await new Promise((res) => setTimeout(res, delay));
+            continue;
+          }
+          console.warn('[PaymentService] Failed to notify OMS (confirm):', err?.message || err);
+          break;
+        }
+      }
+
+      return { success: true, orderId };
+    } catch (error: any) {
+      console.error('[PaymentService] confirmCheckoutSession failed:', error);
+      return { success: false, error: error.message || 'Failed to confirm session' };
+    }
+  }
+
   private async handlePaymentSuccess(session: Stripe.Checkout.Session): Promise<void> {
     try {
       // Get order ID from payment link using session ID
@@ -634,25 +714,33 @@ Need help? Contact us at support@xnext.co.za
         [true, orderId]
       );
 
-      // Notify OMS server of payment completion (service-to-service)
-      console.log(`[PaymentService] Payment completed for order ${orderId}, session ${session.id}`);
-      const omsServerUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
-      const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
-      try {
-        await axios.post(
-          `${omsServerUrl}/orders/${orderId}/payment/success`,
-          { orderId, stripeSessionId: session.id, paidAt: new Date().toISOString() },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'x-service-key': serviceApiKey
-            },
-            timeout: 10000
+      // Notify OMS server of payment completion (service-to-service) with retries
+      const omsUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
+      const svcKey = process.env.ONBOARDING_SERVICE_API_KEY || '';
+      console.log(`[PaymentService] Payment completed for order ${orderId}, session ${session.id}. OMS_URL=${omsUrl.substring(0, 32)}..., KEY=${svcKey.substring(0, 6)}...`);
+      const omsServerUrl = omsUrl;
+      const serviceApiKey = svcKey || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
+      const body = { orderId, stripeSessionId: session.id, paidAt: new Date().toISOString() };
+      const headers = { 'Content-Type': 'application/json', 'x-service-key': serviceApiKey } as const;
+      const maxRetries = 3;
+      const baseDelayMs = 1000;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          await axios.post(`${omsServerUrl}/orders/${orderId}/payment/success`, body, { headers, timeout: 10000 });
+          console.log(`[PaymentService] OMS notified of payment success for order ${orderId}`);
+          break;
+        } catch (notifyErr: any) {
+          const status = notifyErr?.response?.status;
+          const isTransient = status === 429 || status === 502 || status === 503 || status === 504 || notifyErr?.code === 'ECONNRESET' || notifyErr?.code === 'ETIMEDOUT' || notifyErr?.code === 'ENOTFOUND';
+          if (attempt < maxRetries && isTransient) {
+            const delay = baseDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
+            console.warn(`[PaymentService] Notify OMS attempt ${attempt + 1} failed (status: ${status || notifyErr?.code}). Retrying in ${delay}ms...`);
+            await new Promise((res) => setTimeout(res, delay));
+            continue;
           }
-        );
-        console.log(`[PaymentService] OMS notified of payment success for order ${orderId}`);
-      } catch (notifyErr: any) {
-        console.warn('[PaymentService] Failed to notify OMS of payment success:', notifyErr?.message || notifyErr);
+          console.warn('[PaymentService] Failed to notify OMS of payment success:', notifyErr?.message || notifyErr);
+          break;
+        }
       }
     } catch (error) {
       console.error('[PaymentService] Failed to handle payment success:', error);

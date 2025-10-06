@@ -53,6 +53,33 @@ export class PaymentController {
     // Mock checkout page is handled directly in server.ts to bypass authentication
   }
 
+  // Public: confirm payment by Stripe session id (no auth required)
+  public async confirmPayment(req: Request, res: Response): Promise<void> {
+    try {
+      const sessionId = (req.query.session_id as string) || (req.body?.sessionId as string);
+      if (!sessionId) {
+        res.status(400).json({ success: false, error: { message: 'session_id is required' } });
+        return;
+      }
+
+      // Type guard: only real PaymentService has confirmation
+      if (typeof (this.paymentService as any).confirmCheckoutSession !== 'function') {
+        res.status(400).json({ success: false, error: { message: 'Confirmation not available in mock mode' } });
+        return;
+      }
+
+      const result = await (this.paymentService as any).confirmCheckoutSession(sessionId);
+      if (result && result.success) {
+        res.json({ success: true, orderId: result.orderId });
+      } else {
+        res.status(400).json({ success: false, error: { message: result?.error || 'Payment not confirmed' } });
+      }
+    } catch (error: any) {
+      console.error('[PaymentController] confirmPayment failed:', error);
+      res.status(500).json({ success: false, error: { message: error.message || 'Failed to confirm payment' } });
+    }
+  }
+
   private async createPaymentRequest(req: Request, res: Response): Promise<void> {
     try {
       const paymentRequest: PaymentRequest = {
@@ -131,7 +158,9 @@ export class PaymentController {
     try {
       // Get Stripe signature from headers
       const stripeSignature = req.headers['stripe-signature'] as string;
-      const webhookData = req.body;
+      // When using express.raw, req.body is a Buffer; pass both raw and parsed fallbacks
+      const rawBody: Buffer | undefined = Buffer.isBuffer(req.body) ? (req.body as unknown as Buffer) : undefined;
+      const webhookData = rawBody ?? req.body;
 
       // For mock payments, handle differently
       if (this.useMockData) {

@@ -33,6 +33,17 @@ class OnboardingServer {
     this.paymentController = new PaymentController(this.dbService.getPool());
   }
 
+  // Register Stripe webhook route BEFORE JSON body parser to preserve raw body
+  private registerRawWebhookRoute(): void {
+    // Public Stripe webhook (verified with STRIPE_WEBHOOK_SECRET inside controller)
+    // Use express.raw to obtain the exact payload Buffer for signature verification
+    this.app.post(
+      '/api/payments/webhook',
+      express.raw({ type: 'application/json' }),
+      this.paymentController['handleWebhook'].bind(this.paymentController)
+    );
+  }
+
   private setupMiddleware(): void {
     // Security and performance
     this.app.use(helmet({
@@ -78,8 +89,10 @@ class OnboardingServer {
     this.app.use('/api/onboarding', this.onboardingController.getRouter());
     
     // Payment routes with selective authentication
-    // Public Stripe webhook (verified with STRIPE_WEBHOOK_SECRET inside controller)
-    this.app.post('/api/payments/webhook', this.paymentController['handleWebhook'].bind(this.paymentController));
+    // Stripe webhook is registered earlier with express.raw
+
+    // Public confirm endpoint (no auth)
+    this.app.post('/api/payments/confirm', this.paymentController.confirmPayment.bind(this.paymentController));
 
     // Mock checkout pages should be publicly accessible (no auth required)
     if (process.env.USE_MOCK_PAYMENTS === 'true') {
@@ -149,6 +162,8 @@ class OnboardingServer {
         console.log('📝 Service will run without background job processing');
       }
       
+      // Register webhook route with raw body BEFORE general middleware that parses JSON
+      this.registerRawWebhookRoute();
       // Setup middleware and routes
       this.setupMiddleware();
       this.setupRoutes();
