@@ -53,24 +53,43 @@ export const serviceCorsPolicyMiddleware = (req: Request, res: Response, next: N
   const origin = req.headers.origin;
   const forwardedFrom = req.headers['x-forwarded-from'];
 
-  // Allow requests from the main OMS server
+  // Build allowed origin list from env for both service-to-service and public browser calls
+  const corsEnvOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+
   const allowedOrigins = [
-    'http://localhost:3003', // Main OMS server
-    process.env.OMS_SERVER_URL
-  ].filter(Boolean);
+    // Local defaults
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173',
+    'http://localhost:3003',
+    'https://microservices-oms.onrender.com',
+    'https://oms-client-01ry.onrender.com',
+    'https://oms-server-ntlv.onrender.com',
+    // Hosted/service origins
+    process.env.OMS_SERVER_URL,
+    ...corsEnvOrigins
+  ].filter(Boolean) as string[];
 
   // Allow if forwarded from authorized service or from allowed origins
-  if (forwardedFrom === 'oms-server' || (origin && allowedOrigins.includes(origin))) {
+  const isAllowedOrigin = Boolean(origin && allowedOrigins.includes(origin));
+  const isForwardedFromOms = forwardedFrom === 'oms-server';
+
+  if (isForwardedFromOms || isAllowedOrigin) {
     res.header('Access-Control-Allow-Origin', origin || 'http://localhost:3003');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-service-key, x-user-id, x-forwarded-from');
     res.header('Access-Control-Allow-Credentials', 'true');
-  }
-
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(200);
+      return;
+    }
+    next();
     return;
   }
 
+  // If origin is not allowed here, defer to the global cors() middleware to handle
   next();
 };
