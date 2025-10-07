@@ -77,18 +77,22 @@ export class PaymentService {
       const cancelUrl = process.env.CANCEL_URL || `${process.env.CLIENT_URL || 'http://localhost:5173'}/payment/cancelled`;
 
       if (this.provider === 'peach') {
-        // Create Peach checkout (Hosted Checkout)
-        const peachEndpoint = process.env.PEACH_ENDPOINT || 'https://test.oppwa.com';
-        const peachToken = process.env.PEACH_ACCESS_TOKEN as string;
-        if (!peachToken) throw new Error('PEACH_ACCESS_TOKEN is required');
+        // Peach COPYandPAY (Hosted Checkout)
+        const peachEndpoint = (process.env.PEACH_ENDPOINT || 'https://sandbox-card.peachpayments.com').replace(/\/+$/g, '');
+        const entityId = process.env.PEACH_HOSTED_ENTITY_ID || process.env.PEACH_ENTITY_ID;
+        const accessToken = process.env.PEACH_HOSTED_ACCESS_TOKEN || process.env.PEACH_ACCESS_TOKEN;
+        if (!entityId) throw new Error('PEACH_HOSTED_ENTITY_ID is required');
+        if (!accessToken) throw new Error('PEACH_HOSTED_ACCESS_TOKEN is required');
 
         const amountZAR = (totalAmount / 100).toFixed(2);
         const checkoutId = `peach_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Example: initiate checkout (this may vary depending on your Peach product)
-        const initResp = await axios.post(`${peachEndpoint}/v1/checkouts`, {
+        // Create checkout (entityId in query string), include success/cancel with {reference}
+        const createUrl = `${peachEndpoint}/v1/checkouts?entityId=${encodeURIComponent(entityId)}`;
+        const initResp = await axios.post(createUrl, {
           amount: amountZAR,
           currency: 'ZAR',
+          paymentType: 'DB',
           merchantTransactionId: request.orderId,
           customer: {
             email: request.customerEmail,
@@ -104,12 +108,14 @@ export class PaymentService {
           successUrl: `${successUrl}?ref={reference}`,
           cancelUrl: `${cancelUrl}?ref={reference}`
         }, {
-          headers: { Authorization: `Bearer ${peachToken}` }
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          timeout: 20000
         });
 
         const ref = initResp.data?.reference || initResp.data?.id || initResp.data?.checkoutId;
-        const redirectUrl = initResp.data?.redirectUrl || initResp.data?.paymentLink || initResp.data?.url;
-        if (!ref || !redirectUrl) throw new Error('Failed to create Peach checkout');
+        // Build hosted payment page URL explicitly with entityId
+        const hostedUrl = ref ? `${peachEndpoint}/v1/checkouts/${encodeURIComponent(ref)}/payment?entityId=${encodeURIComponent(entityId)}` : undefined;
+        if (!ref || !hostedUrl) throw new Error('Failed to create Peach checkout');
 
         await this.db.query(
           `INSERT INTO payment_links (id, order_id, customer_id, peach_checkout_id, stripe_session_id, url, amount_cents, currency, status, expires_at, customer_email, created_at)
@@ -120,7 +126,7 @@ export class PaymentService {
             request.customerId,
             ref,
             null,
-            redirectUrl,
+            hostedUrl,
             totalAmount,
             'ZAR',
             'pending',
@@ -131,7 +137,7 @@ export class PaymentService {
 
         return {
           id: checkoutId,
-          url: redirectUrl,
+          url: hostedUrl,
           checkoutId: ref,
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
         };
@@ -717,9 +723,12 @@ Need help? Contact us at support@xnext.co.za
       let orderId: string | undefined = res.rows[0]?.order_id;
 
       // Query Peach for final status
-      const peachEndpoint = process.env.PEACH_ENDPOINT || 'https://test.oppwa.com';
-      const peachToken = process.env.PEACH_ACCESS_TOKEN as string;
-      const statusResp = await axios.get(`${peachEndpoint}/v1/checkouts/${reference}/payment`, { headers: { Authorization: `Bearer ${peachToken}` } });
+      const peachEndpoint = (process.env.PEACH_ENDPOINT || 'https://sandbox-card.peachpayments.com').replace(/\/+$/g, '');
+      const entityId = process.env.PEACH_HOSTED_ENTITY_ID || process.env.PEACH_ENTITY_ID;
+      const accessToken = process.env.PEACH_HOSTED_ACCESS_TOKEN || process.env.PEACH_ACCESS_TOKEN;
+      if (!entityId || !accessToken) return { success: false, error: 'Missing Peach hosted credentials' };
+      const statusUrl = `${peachEndpoint}/v1/checkouts/${encodeURIComponent(reference)}/payment?entityId=${encodeURIComponent(entityId)}`;
+      const statusResp = await axios.get(statusUrl, { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 15000, validateStatus: () => true });
       const code = statusResp.data?.result?.code || statusResp.data?.resultCode || statusResp.data?.result;
       const isPaid = typeof code === 'string' && (code.startsWith('000.000') || code.startsWith('000.100'));
       if (!isPaid) return { success: false, error: `Payment status not paid (code=${code || 'unknown'})` };
