@@ -8,6 +8,8 @@ import { QueueService } from './services/queue.service';
 import { DatabaseService } from './services/database.service';
 import { OnboardingController } from './controllers/onboarding.controller';
 import { PaymentController } from './controllers/payment.controller';
+import { PaymentService } from './services/payment.service';
+import { ReconcilerService } from './services/reconciler.service';
 import { serviceAuthMiddleware, serviceCorsPolicyMiddleware } from './middleware/service-auth.middleware';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { requestLogger } from './middleware/logger.middleware';
@@ -22,6 +24,7 @@ class OnboardingServer {
   private dbService: DatabaseService;
   private onboardingController: OnboardingController;
   private paymentController: PaymentController;
+  private reconcilerService?: ReconcilerService;
 
   constructor() {
     this.app = express();
@@ -168,6 +171,22 @@ class OnboardingServer {
       this.setupMiddleware();
       this.setupRoutes();
       this.setupGracefulShutdown();
+      
+      // Start reconciler (payment status validator) every 6 hours by default
+      try {
+        const provider = process.env.PAYMENT_PROVIDER === 'peach' ? 'peach' : 'stripe';
+        const paymentService = new PaymentService(this.dbService.getPool(), provider as any);
+        const intervalMinutes = parseInt(process.env.RECONCILE_INTERVAL_MINUTES || '360');
+        const minAgeMinutes = parseInt(process.env.RECONCILE_MIN_AGE_MINUTES || '10');
+        this.reconcilerService = new ReconcilerService(this.dbService.getPool(), paymentService, {
+          runIntervalMs: intervalMinutes * 60 * 1000,
+          batchSize: 50,
+          minAgeMinutes
+        });
+        this.reconcilerService.start();
+      } catch (recErr) {
+        console.warn('⚠️  Reconciler not started:', (recErr as Error).message);
+      }
       
       // Start server
       this.app.listen(this.port, () => {

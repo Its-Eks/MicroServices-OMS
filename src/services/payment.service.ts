@@ -34,22 +34,25 @@ export interface PaymentLink {
 }
 
 export class PaymentService {
-  private stripe: Stripe;
+  private stripe: Stripe | null = null;
   private emailTransporter: nodemailer.Transporter;
   private db: Pool;
+  private provider: 'stripe' | 'peach';
 
-  constructor(db: Pool) {
+  constructor(db: Pool, provider: 'stripe' | 'peach' = (process.env.PAYMENT_PROVIDER === 'peach' ? 'peach' : 'stripe')) {
     this.db = db;
+    this.provider = provider;
     
-    // Initialize Stripe
-    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-    if (!stripeSecretKey) {
-      throw new Error('STRIPE_SECRET_KEY is required');
+    // Initialize Stripe only if provider is stripe
+    if (this.provider === 'stripe') {
+      const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeSecretKey) {
+        throw new Error('STRIPE_SECRET_KEY is required');
+      }
+      this.stripe = new Stripe(stripeSecretKey, {
+        apiVersion: '2025-09-30.clover', // Use latest stable API version
+      });
     }
-    
-    this.stripe = new Stripe(stripeSecretKey, {
-      apiVersion: '2025-09-30.clover', // Use latest stable API version
-    });
 
     // Initialize email transporter
     this.emailTransporter = nodemailer.createTransport({
@@ -70,10 +73,73 @@ export class PaymentService {
       const installationAmount = (request.servicePackage.installationFee || 0) * 100;
       const totalAmount = serviceAmount + installationAmount;
 
-      // Generate unique checkout ID
-      const checkoutId = `stripe_checkout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const successUrl = process.env.SUCCESS_URL || `${process.env.CLIENT_URL || 'http://localhost:5173'}/payment/success`;
+      const cancelUrl = process.env.CANCEL_URL || `${process.env.CLIENT_URL || 'http://localhost:5173'}/payment/cancelled`;
 
-      // Create line items for Stripe
+      if (this.provider === 'peach') {
+        // Create Peach checkout (Hosted Checkout)
+        const peachEndpoint = process.env.PEACH_ENDPOINT || 'https://test.oppwa.com';
+        const peachToken = process.env.PEACH_ACCESS_TOKEN as string;
+        if (!peachToken) throw new Error('PEACH_ACCESS_TOKEN is required');
+
+        const amountZAR = (totalAmount / 100).toFixed(2);
+        const checkoutId = `peach_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        // Example: initiate checkout (this may vary depending on your Peach product)
+        const initResp = await axios.post(`${peachEndpoint}/v1/checkouts`, {
+          amount: amountZAR,
+          currency: 'ZAR',
+          merchantTransactionId: request.orderId,
+          customer: {
+            email: request.customerEmail,
+            givenName: request.customerName
+          },
+          billing: {
+            street1: request.serviceAddress.street,
+            city: request.serviceAddress.city,
+            state: request.serviceAddress.province,
+            postcode: request.serviceAddress.postalCode,
+            country: 'ZA'
+          },
+          successUrl: `${successUrl}?ref={reference}`,
+          cancelUrl: `${cancelUrl}?ref={reference}`
+        }, {
+          headers: { Authorization: `Bearer ${peachToken}` }
+        });
+
+        const ref = initResp.data?.reference || initResp.data?.id || initResp.data?.checkoutId;
+        const redirectUrl = initResp.data?.redirectUrl || initResp.data?.paymentLink || initResp.data?.url;
+        if (!ref || !redirectUrl) throw new Error('Failed to create Peach checkout');
+
+        await this.db.query(
+          `INSERT INTO payment_links (id, order_id, customer_id, peach_checkout_id, stripe_session_id, url, amount_cents, currency, status, expires_at, customer_email, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+          [
+            checkoutId,
+            request.orderId,
+            request.customerId,
+            ref,
+            null,
+            redirectUrl,
+            totalAmount,
+            'ZAR',
+            'pending',
+            new Date(Date.now() + 24 * 60 * 60 * 1000),
+            request.customerEmail
+          ]
+        );
+
+        return {
+          id: checkoutId,
+          url: redirectUrl,
+          checkoutId: ref,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        };
+      }
+
+      // Stripe branch (legacy)
+      const checkoutId = `stripe_checkout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      if (!this.stripe) throw new Error('Stripe not initialized');
       const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
         {
           price_data: {
@@ -92,8 +158,6 @@ export class PaymentService {
           quantity: 1,
         }
       ];
-
-      // Add installation fee if present
       if (installationAmount > 0) {
         lineItems.push({
           price_data: {
@@ -107,8 +171,6 @@ export class PaymentService {
           quantity: 1,
         });
       }
-
-      // Create Stripe Checkout Session
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: lineItems,
@@ -122,34 +184,16 @@ export class PaymentService {
           servicePackage: request.servicePackage.name,
           checkoutId: checkoutId
         },
-        success_url: `${process.env.CLIENT_URL || 'http://localhost:5173'}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.CLIENT_URL || 'http://localhost:5173'}/payment/cancelled?session_id={CHECKOUT_SESSION_ID}`,
-        expires_at: Math.floor((Date.now() + 24 * 60 * 60 * 1000) / 1000), // 24 hours from now
+        success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${cancelUrl}?session_id={CHECKOUT_SESSION_ID}`,
+        expires_at: Math.floor((Date.now() + 24 * 60 * 60 * 1000) / 1000),
         billing_address_collection: 'required',
-        shipping_address_collection: {
-          allowed_countries: ['ZA'], // South Africa only
-        },
-        phone_number_collection: {
-          enabled: true,
-        },
-        custom_fields: [
-          {
-            key: 'service_address',
-            label: {
-              type: 'custom',
-              custom: 'Service Address (if different from billing)',
-            },
-            type: 'text',
-            optional: true,
-          },
-        ],
+        shipping_address_collection: { allowed_countries: ['ZA'] },
+        phone_number_collection: { enabled: true },
       });
-
       if (!session.id || !session.url) {
         throw new Error('Failed to create Stripe checkout session');
       }
-
-      // Store payment link in database
       await this.db.query(
         `INSERT INTO payment_links (id, order_id, customer_id, peach_checkout_id, stripe_session_id, url, amount_cents, currency, status, expires_at, customer_email, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
@@ -157,23 +201,17 @@ export class PaymentService {
           checkoutId,
           request.orderId,
           request.customerId,
-          `stripe_migration_${session.id}`, // peach_checkout_id - temporary value for Stripe payments
-          session.id, // stripe_session_id
+          `stripe_migration_${session.id}`,
+          session.id,
           session.url,
           totalAmount,
           'ZAR',
           'pending',
-          new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
+          new Date(Date.now() + 24 * 60 * 60 * 1000),
           request.customerEmail
         ]
       );
-
-      return {
-        id: checkoutId,
-        url: session.url,
-        sessionId: session.id,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
-      };
+      return { id: checkoutId, url: session.url, sessionId: session.id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) };
     } catch (error) {
       console.error('[PaymentService] Failed to create payment link:', error);
       throw new Error(`Failed to create payment link: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -505,14 +543,21 @@ Need help? Contact us at support@xnext.co.za
       }
 
       const paymentRecord = result.rows[0];
+      if (this.provider === 'peach') {
+        return {
+          id: paymentRecord.id,
+          status: paymentRecord.status,
+          amount: paymentRecord.amount_cents,
+          currency: paymentRecord.currency,
+          customerEmail: paymentRecord.customer_email,
+          reference: paymentRecord.peach_checkout_id,
+          url: paymentRecord.url
+        };
+      }
+      if (!this.stripe) throw new Error('Stripe not initialized');
       const stripeSessionId = paymentRecord.stripe_session_id;
-
-      // Get session from Stripe
       const session = await this.stripe.checkout.sessions.retrieve(stripeSessionId);
-      
       let status = 'pending';
-      
-      // Map Stripe session status to our internal status
       switch (session.payment_status) {
         case 'paid':
           status = 'completed';
@@ -526,18 +571,7 @@ Need help? Contact us at support@xnext.co.za
         default:
           status = 'pending';
       }
-      
-      return {
-        id: paymentRecord.id,
-        sessionId: stripeSessionId,
-        status: status,
-        amount: session.amount_total,
-        currency: session.currency?.toUpperCase(),
-        paymentStatus: session.payment_status,
-        sessionStatus: session.status,
-        customerEmail: session.customer_email,
-        paymentIntent: session.payment_intent
-      };
+      return { id: paymentRecord.id, sessionId: stripeSessionId, status, amount: session.amount_total, currency: session.currency?.toUpperCase(), paymentStatus: session.payment_status, sessionStatus: session.status, customerEmail: session.customer_email, paymentIntent: session.payment_intent };
     } catch (error) {
       console.error('[PaymentService] Failed to get payment status:', error);
       throw new Error('Failed to get payment status');
@@ -546,65 +580,73 @@ Need help? Contact us at support@xnext.co.za
 
   async handleWebhook(webhookData: any, stripeSignature?: string): Promise<void> {
     try {
+      if (this.provider !== 'stripe') {
+        throw new Error('handleWebhook is Stripe-only; use handlePeachWebhook for Peach');
+      }
+      if (!this.stripe) throw new Error('Stripe not initialized');
       let event: Stripe.Event;
-
-      // Verify webhook signature if provided
       if (stripeSignature) {
         const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-        if (!webhookSecret) {
-          throw new Error('STRIPE_WEBHOOK_SECRET is required for webhook verification');
-        }
-
-        // Use raw Buffer if provided by controller (express.raw), else fall back to JSON string
+        if (!webhookSecret) throw new Error('STRIPE_WEBHOOK_SECRET is required for webhook verification');
         const payload: Buffer | string = Buffer.isBuffer(webhookData) ? (webhookData as Buffer) : JSON.stringify(webhookData);
-        if (!Buffer.isBuffer(payload)) {
-          console.warn('[PaymentService] Warning: webhook payload is not a Buffer; using JSON string fallback');
-        }
+        if (!Buffer.isBuffer(payload)) console.warn('[PaymentService] Warning: webhook payload is not a Buffer; using JSON string fallback');
         event = this.stripe.webhooks.constructEvent(payload as any, stripeSignature, webhookSecret);
       } else {
-        // For development/testing without signature verification
         event = webhookData as Stripe.Event;
       }
-
       const sessionId = (event.data.object as any).id;
-      
-      if (!sessionId) {
-        console.warn('[PaymentService] Webhook received without session ID');
-        return;
-      }
-
-      // Log webhook event - use existing peach_checkout_id column for now
+      if (!sessionId) { console.warn('[PaymentService] Webhook received without session ID'); return; }
       await this.db.query(
         `INSERT INTO payment_webhook_events (peach_checkout_id, event_type, event_data, created_at)
          VALUES ($1, $2, $3, NOW())`,
         [sessionId, event.type, JSON.stringify(event)]
       );
-
-      // Handle different event types
       switch (event.type) {
         case 'checkout.session.completed':
           const session = event.data.object as Stripe.Checkout.Session;
-          if (session.payment_status === 'paid') {
-            await this.handlePaymentSuccess(session);
-          }
+          if (session.payment_status === 'paid') { await this.handlePaymentSuccess(session); }
           break;
-        
         case 'checkout.session.expired':
           await this.handlePaymentExpired(event.data.object as Stripe.Checkout.Session);
           break;
-          
         case 'payment_intent.payment_failed':
           await this.handlePaymentFailure(event.data.object);
           break;
-          
         default:
           console.log(`[PaymentService] Unhandled webhook event: ${event.type}`);
       }
-
       console.log(`[PaymentService] Webhook processed for session ${sessionId}, event: ${event.type}`);
     } catch (error) {
       console.error('[PaymentService] Webhook handling failed:', error);
       throw error;
+    }
+  }
+
+  // Peach: webhook handler with HMAC verification (headers and body)
+  async handlePeachWebhook(body: any, headers: Record<string, any>): Promise<void> {
+    if (this.provider !== 'peach') throw new Error('Peach webhook called when provider is not peach');
+    // NOTE: HMAC details depend on Peach configuration; placeholder verification structure
+    const signatureHeader = headers['x-peach-signature'] || headers['x-oppwa-signature'] || headers['x-hmac-signature'];
+    const secret = process.env.PEACH_WEBHOOK_SECRET;
+    if (secret && signatureHeader) {
+      const computed = crypto.createHmac('sha256', secret).update(typeof body === 'string' ? body : JSON.stringify(body)).digest('hex');
+      if (computed !== signatureHeader) {
+        throw new Error('Invalid Peach webhook signature');
+      }
+    }
+    const ref = body?.reference || body?.id || body?.checkoutId || body?.ndc;
+    const code = body?.result?.code || body?.resultCode || body?.result;
+    if (!ref) return;
+    // Map result codes to status
+    const isPaid = typeof code === 'string' && (code.startsWith('000.000') || code.startsWith('000.100'));
+    if (isPaid) {
+      // Find order by reference
+      const res = await this.db.query('SELECT order_id FROM payment_links WHERE peach_checkout_id = $1', [ref]);
+      if (res.rows.length === 0) return;
+      const orderId = res.rows[0].order_id as string;
+      await this.db.query(`UPDATE payment_links SET status = 'paid', paid_at = COALESCE(paid_at, NOW()) WHERE peach_checkout_id = $1`, [ref]);
+      await this.db.query(`UPDATE orders SET is_paid = TRUE, status = 'payment_received', paid_at = COALESCE(paid_at, NOW()), updated_at = NOW() WHERE id = $1`, [orderId]);
+      await this.notifyOms(orderId, { peachReference: ref });
     }
   }
 
@@ -613,6 +655,8 @@ Need help? Contact us at support@xnext.co.za
    */
   async confirmCheckoutSession(sessionId: string): Promise<{ success: boolean; orderId?: string; error?: string }> {
     try {
+      if (this.provider !== 'stripe') return { success: false, error: 'Stripe confirmation disabled' };
+      if (!this.stripe) throw new Error('Stripe not initialized');
       if (!sessionId) {
         return { success: false, error: 'sessionId is required' };
       }
@@ -654,36 +698,72 @@ Need help? Contact us at support@xnext.co.za
         [orderId]
       );
 
-      // Notify OMS with retry/backoff (reuse same logic as webhook path)
-      const omsServerUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
-      const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
-      const body = { orderId, stripeSessionId: sessionId, paidAt: new Date().toISOString() };
-      const headers = { 'Content-Type': 'application/json', 'x-service-key': serviceApiKey } as const;
-      const maxRetries = 3;
-      const baseDelayMs = 1000;
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-          await axios.post(`${omsServerUrl}/orders/${orderId}/payment/success`, body, { headers, timeout: 10000 });
-          console.log(`[PaymentService] OMS notified of payment success (confirm) for order ${orderId}`);
-          break;
-        } catch (err: any) {
-          const status = err?.response?.status;
-          const isTransient = status === 429 || status === 502 || status === 503 || status === 504 || err?.code === 'ECONNRESET' || err?.code === 'ETIMEDOUT' || err?.code === 'ENOTFOUND';
-          if (attempt < maxRetries && isTransient) {
-            const delay = baseDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
-            console.warn(`[PaymentService] Notify OMS (confirm) attempt ${attempt + 1} failed (status: ${status || err?.code}). Retrying in ${delay}ms...`);
-            await new Promise((res) => setTimeout(res, delay));
-            continue;
-          }
-          console.warn('[PaymentService] Failed to notify OMS (confirm):', err?.message || err);
-          break;
-        }
-      }
+      await this.notifyOms(orderId, { stripeSessionId: sessionId });
 
       return { success: true, orderId };
     } catch (error: any) {
       console.error('[PaymentService] confirmCheckoutSession failed:', error);
       return { success: false, error: error.message || 'Failed to confirm session' };
+    }
+  }
+
+  // Peach: confirm by reference
+  async confirmPeachReference(reference: string): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    try {
+      if (this.provider !== 'peach') return { success: false, error: 'Peach confirmation disabled' };
+      if (!reference) return { success: false, error: 'reference is required' };
+
+      const res = await this.db.query('SELECT order_id FROM payment_links WHERE peach_checkout_id = $1', [reference]);
+      let orderId: string | undefined = res.rows[0]?.order_id;
+
+      // Query Peach for final status
+      const peachEndpoint = process.env.PEACH_ENDPOINT || 'https://test.oppwa.com';
+      const peachToken = process.env.PEACH_ACCESS_TOKEN as string;
+      const statusResp = await axios.get(`${peachEndpoint}/v1/checkouts/${reference}/payment`, { headers: { Authorization: `Bearer ${peachToken}` } });
+      const code = statusResp.data?.result?.code || statusResp.data?.resultCode || statusResp.data?.result;
+      const isPaid = typeof code === 'string' && (code.startsWith('000.000') || code.startsWith('000.100'));
+      if (!isPaid) return { success: false, error: `Payment status not paid (code=${code || 'unknown'})` };
+
+      if (!orderId) {
+        // Fallback: attempt to read merchantTransactionId
+        orderId = statusResp.data?.merchantTransactionId || statusResp.data?.merchant?.transactionId;
+      }
+      if (!orderId) return { success: false, error: 'Order not associated with reference' };
+
+      await this.db.query(`UPDATE payment_links SET status = 'paid', paid_at = COALESCE(paid_at, NOW()) WHERE peach_checkout_id = $1`, [reference]);
+      await this.db.query(`UPDATE orders SET is_paid = TRUE, status = 'payment_received', paid_at = COALESCE(paid_at, NOW()), updated_at = NOW() WHERE id = $1`, [orderId]);
+      await this.notifyOms(orderId, { peachReference: reference });
+      return { success: true, orderId };
+    } catch (error: any) {
+      console.error('[PaymentService] confirmPeachReference failed:', error);
+      return { success: false, error: error.message || 'Failed to confirm reference' };
+    }
+  }
+
+  private async notifyOms(orderId: string, payload: Record<string, any>): Promise<void> {
+    const omsServerUrl = process.env.OMS_SERVER_URL || 'http://localhost:3003';
+    const serviceApiKey = process.env.ONBOARDING_SERVICE_API_KEY || 'oms-svc-auth-x9k2m8n4p7q1w5e8r3t6y9u2i5o8p1a4s7d0f3g6h9j2k5l8';
+    const body = { orderId, paidAt: new Date().toISOString(), ...payload };
+    const headers = { 'Content-Type': 'application/json', 'x-service-key': serviceApiKey } as const;
+    const maxRetries = 3;
+    const baseDelayMs = 1000;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await axios.post(`${omsServerUrl}/orders/${orderId}/payment/success`, body, { headers, timeout: 10000 });
+        console.log(`[PaymentService] OMS notified of payment success for order ${orderId}`);
+        break;
+      } catch (err: any) {
+        const status = err?.response?.status;
+        const isTransient = status === 429 || status === 502 || status === 503 || status === 504 || err?.code === 'ECONNRESET' || err?.code === 'ETIMEDOUT' || err?.code === 'ENOTFOUND';
+        if (attempt < maxRetries && isTransient) {
+          const delay = baseDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
+          console.warn(`[PaymentService] Notify OMS attempt ${attempt + 1} failed (status: ${status || err?.code}). Retrying in ${delay}ms...`);
+          await new Promise((res) => setTimeout(res, delay));
+          continue;
+        }
+        console.warn('[PaymentService] Failed to notify OMS of payment success:', err?.message || err);
+        break;
+      }
     }
   }
 

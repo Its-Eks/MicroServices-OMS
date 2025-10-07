@@ -7,21 +7,23 @@ export class PaymentController {
   public router: Router;
   private paymentService: PaymentService | MockPaymentService;
   private useMockData: boolean;
+  private provider: 'stripe' | 'peach';
 
   constructor(db: Pool) {
     this.router = Router();
     
-    // Determine if we should use mock data
-    // Use mock ONLY if explicitly enabled OR if no valid Stripe key is provided
+    // Determine provider and whether to use mock
+    this.provider = (process.env.PAYMENT_PROVIDER === 'peach' ? 'peach' : 'stripe');
+    // Use mock ONLY if explicitly enabled OR if provider is stripe and no valid key
     const hasValidStripeKey = process.env.STRIPE_SECRET_KEY && 
-                             process.env.STRIPE_SECRET_KEY !== 'sk_test_your_secret_key' &&
-                             process.env.STRIPE_SECRET_KEY.startsWith('sk_');
-    
-    this.useMockData = process.env.USE_MOCK_PAYMENTS === 'true' || !hasValidStripeKey;
+                             process.env.STRIPE_SECRET_KEY !== '' &&
+                             (process.env.STRIPE_SECRET_KEY as string).startsWith('sk_');
+    this.useMockData = process.env.USE_MOCK_PAYMENTS === 'true' || (this.provider === 'stripe' && !hasValidStripeKey);
     
     // Debug logging
     console.log('[PaymentController] Configuration check:', {
       USE_MOCK_PAYMENTS: process.env.USE_MOCK_PAYMENTS,
+      PAYMENT_PROVIDER: this.provider,
       STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'present' : 'missing',
       hasValidStripeKey: hasValidStripeKey,
       useMockData: this.useMockData
@@ -30,9 +32,9 @@ export class PaymentController {
     // Initialize appropriate service
     this.paymentService = this.useMockData 
       ? new MockPaymentService(db)
-      : new PaymentService(db);
+      : new PaymentService(db, this.provider);
 
-    console.log(`[PaymentController] Using ${this.useMockData ? 'MOCK' : 'REAL STRIPE'} payment service`);
+    console.log(`[PaymentController] Using ${this.useMockData ? 'MOCK' : this.provider.toUpperCase()} payment service`);
     
     this.setupRoutes();
   }
@@ -53,21 +55,39 @@ export class PaymentController {
     // Mock checkout page is handled directly in server.ts to bypass authentication
   }
 
-  // Public: confirm payment by Stripe session id (no auth required)
+  // Public: confirm payment by Stripe session id or Peach reference (no auth required)
   public async confirmPayment(req: Request, res: Response): Promise<void> {
     try {
       const sessionId = (req.query.session_id as string) || (req.body?.sessionId as string);
+      const ref = (req.query.ref as string) || (req.body?.ref as string);
+      const isPeach = (this.provider === 'peach');
+
+      if (isPeach) {
+        if (!ref && !sessionId) {
+          res.status(400).json({ success: false, error: { message: 'ref (Peach reference) is required' } });
+          return;
+        }
+        if (typeof (this.paymentService as any).confirmPeachReference !== 'function') {
+          res.status(400).json({ success: false, error: { message: 'Confirmation not available in mock mode' } });
+          return;
+        }
+        const result = await (this.paymentService as any).confirmPeachReference(ref || sessionId);
+        if (result && result.success) {
+          res.json({ success: true, orderId: result.orderId });
+        } else {
+          res.status(400).json({ success: false, error: { message: result?.error || 'Payment not confirmed' } });
+        }
+        return;
+      }
+
       if (!sessionId) {
         res.status(400).json({ success: false, error: { message: 'session_id is required' } });
         return;
       }
-
-      // Type guard: only real PaymentService has confirmation
       if (typeof (this.paymentService as any).confirmCheckoutSession !== 'function') {
         res.status(400).json({ success: false, error: { message: 'Confirmation not available in mock mode' } });
         return;
       }
-
       const result = await (this.paymentService as any).confirmCheckoutSession(sessionId);
       if (result && result.success) {
         res.json({ success: true, orderId: result.orderId });
@@ -156,8 +176,6 @@ export class PaymentController {
 
   private async handleWebhook(req: Request, res: Response): Promise<void> {
     try {
-      // Get Stripe signature from headers
-      const stripeSignature = req.headers['stripe-signature'] as string;
       // When using express.raw, req.body is a Buffer; pass both raw and parsed fallbacks
       const rawBody: Buffer | undefined = Buffer.isBuffer(req.body) ? (req.body as unknown as Buffer) : undefined;
       const webhookData = rawBody ?? req.body;
@@ -178,18 +196,25 @@ export class PaymentController {
         return;
       }
 
-      // For real Stripe webhooks, verify signature
-      if (!stripeSignature) {
-        res.status(400).json({ error: 'Missing Stripe signature' });
-        return;
+      if (this.provider === 'peach') {
+        // Forward body and headers to service for Peach HMAC verification
+        const headers = req.headers as Record<string, any>;
+        if (typeof (this.paymentService as any).handlePeachWebhook !== 'function') {
+          res.status(400).json({ error: 'Peach webhook not available' });
+          return;
+        }
+        await (this.paymentService as any).handlePeachWebhook(webhookData, headers);
+        res.json({ success: true, message: 'Peach webhook processed successfully' });
+      } else {
+        // Stripe: verify signature
+        const stripeSignature = req.headers['stripe-signature'] as string;
+        if (!stripeSignature) {
+          res.status(400).json({ error: 'Missing Stripe signature' });
+          return;
+        }
+        await this.paymentService.handleWebhook(webhookData, stripeSignature);
+        res.json({ success: true, message: 'Stripe webhook processed successfully' });
       }
-
-      await this.paymentService.handleWebhook(webhookData, stripeSignature);
-
-      res.json({ 
-        success: true,
-        message: 'Stripe webhook processed successfully'
-      });
     } catch (error: any) {
       console.error('[PaymentController] Webhook handling failed:', error);
       res.status(400).json({

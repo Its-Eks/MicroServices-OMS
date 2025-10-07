@@ -1,19 +1,19 @@
-## Stripe Payment Gateway – Implementation & Testing Guide
+## Payment Gateway – Stripe (legacy) and Peach (current)
 
 This guide explains how the onboarding service integrates with Stripe to generate payment links, send branded emails, and update orders on successful payment via webhooks. It also includes Postman steps and troubleshooting tips.
 
 ## Architecture Overview
 
 - **OMS Server**: Creates orders and calls the onboarding service to generate a payment link. Optionally proxies email sending.
-- **Onboarding Service**: Creates Stripe Checkout Sessions, stores payment links, sends email via OMS, and processes webhooks.
-- **Stripe**: Hosts secure checkout and sends webhook events.
+- **Onboarding Service**: Creates checkout sessions (Stripe) or Peach references, stores payment links, sends email via OMS, and processes webhooks.
+- **Stripe/Peach**: Hosts secure checkout and sends webhook events.
 - **Database**: Tracks `payment_links`, `payment_notifications`, and `payment_webhook_events`. Order `is_paid` is updated on success.
 
 Flow:
 1. OMS creates order → calls `POST /api/payments/create`.
-2. Onboarding creates Stripe session → stores link → sends email.
-3. Customer pays on Stripe → Stripe webhook → onboarding sets `orders.is_paid=true` and marks link paid.
-4. Frontend redirects to `/payment/success?session_id=...`.
+2. Onboarding creates checkout (Stripe session or Peach reference) → stores link → sends email.
+3. Customer pays → Gateway webhook → onboarding sets `orders.is_paid=true` and marks link paid.
+4. Frontend redirects to `/payment/success` with either `?session_id=...` (Stripe) or `?ref=...` (Peach).
 
 ## Prerequisites
 
@@ -35,11 +35,20 @@ NODE_ENV=production
 DATABASE_URL=postgres://user:pass@host:5432/db
 POSTGRES_SSL=true
 
-# Stripe
+# Provider switch
+PAYMENT_PROVIDER=peach
+
+# Stripe (legacy)
 STRIPE_SECRET_KEY=sk_test_xxx
 STRIPE_PUBLISHABLE_KEY=pk_test_xxx
 STRIPE_WEBHOOK_SECRET=whsec_xxx
 STRIPE_MODE=test
+
+# Peach
+PEACH_ENDPOINT=https://test.oppwa.com
+PEACH_MERCHANT_ID=your_merchant_id
+PEACH_ACCESS_TOKEN=your_access_token
+PEACH_WEBHOOK_SECRET=your_webhook_hmac_secret
 
 # Behavior
 USE_MOCK_PAYMENTS=false
@@ -124,24 +133,26 @@ Email sending is non-blocking. Even if OMS email proxy or SMTP fails, the endpoi
 ### Get Payment Status
 `GET /api/payments/:paymentLinkId/status`
 
-Returns Stripe session status mapped to `pending/completed/expired/failed` with details.
+- Stripe: returns live Stripe session details mapped to `pending/completed/expired/failed`.
+- Peach: returns DB-backed status and stored `peach_checkout_id` reference.
 
 ### Resend Payment Email
 `POST /api/payments/:paymentLinkId/resend`
 
 Resends via OMS email API. Uses `x-service-key` header internally.
 
-### Stripe Webhook
+### Webhooks (Stripe or Peach)
 `POST /api/payments/webhook`
 
-Configure in Stripe Dashboard → Developers → Webhooks:
-- URL: `https://YOUR-ONBOARDING-DOMAIN/api/payments/webhook`
-- Events: `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`
-- Signing secret → set as `STRIPE_WEBHOOK_SECRET`
+- Stripe mode:
+  - Configure Dashboard with URL above and set `STRIPE_WEBHOOK_SECRET`.
+  - Events: `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`.
+  - On completed paid session → mark paid and notify OMS.
 
-On `checkout.session.completed` with `payment_status=paid`, the onboarding service:
-- Updates `payment_links.status='paid'`, sets `paid_at=NOW()`
-- Updates `orders.is_paid=true`
+- Peach mode:
+  - Configure Peach webhook to the same URL.
+  - HMAC signature verified using `PEACH_WEBHOOK_SECRET`.
+  - Map Peach result codes: `000.000.*` or `000.100.*` → paid; pending/failed otherwise.
 
 ## Postman Testing – Step by Step
 
@@ -163,8 +174,8 @@ On `checkout.session.completed` with `payment_status=paid`, the onboarding servi
 
 ## Frontend
 
-- Add route `GET /payment/success` and render a confirmation page.
-- The session id is available in the query string `session_id`.
+- Route `GET /payment/success` renders a confirmation page.
+- Query string contains either `session_id` (Stripe) or `ref` (Peach).
 
 ## Mock vs Real Payments
 
@@ -218,7 +229,6 @@ On `checkout.session.completed` with `payment_status=paid`, the onboarding servi
 
 ## Change Log (Highlights)
 
-- Switched from Peach Payments to Stripe Checkout Sessions
-- Added `stripe_session_id`, `paid_at` columns and indices
-- Non-blocking email send during payment creation
-- Email proxy via OMS `/api/email/send` using `x-service-key`
+- Added provider switch with Peach as current provider
+- Confirm endpoint now accepts `ref` for Peach
+- Webhook handler supports Stripe or Peach based on provider
