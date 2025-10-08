@@ -87,8 +87,10 @@ export class PaymentService {
         const amountZAR = (totalAmount / 100).toFixed(2);
         const checkoutId = `peach_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Create checkout (entityId in query string), include success/cancel with {reference}
-        const createUrl = `${peachEndpoint}/v1/checkouts?entityId=${encodeURIComponent(entityId)}`;
+        // Create checkout using Basic Auth (Entity ID:Access Token)
+        const createUrl = `${peachEndpoint}/v1/checkouts`;
+        const authHeader = Buffer.from(`${entityId}:${accessToken}`).toString('base64');
+        
         const initResp = await axios.post(createUrl, {
           amount: amountZAR,
           currency: 'ZAR',
@@ -108,13 +110,16 @@ export class PaymentService {
           successUrl: `${successUrl}?ref={reference}`,
           cancelUrl: `${cancelUrl}?ref={reference}`
         }, {
-          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          headers: { 
+            Authorization: `Basic ${authHeader}`, 
+            'Content-Type': 'application/json' 
+          },
           timeout: 20000
         });
 
         const ref = initResp.data?.reference || initResp.data?.id || initResp.data?.checkoutId;
-        // Build hosted payment page URL explicitly with entityId
-        const hostedUrl = ref ? `${peachEndpoint}/v1/checkouts/${encodeURIComponent(ref)}/payment?entityId=${encodeURIComponent(entityId)}` : undefined;
+        // Build hosted payment page URL (entityId is in the checkout response)
+        const hostedUrl = ref ? `${peachEndpoint}/v1/checkouts/${encodeURIComponent(ref)}/payment` : undefined;
         if (!ref || !hostedUrl) throw new Error('Failed to create Peach checkout');
 
         await this.db.query(
@@ -727,8 +732,14 @@ Need help? Contact us at support@xnext.co.za
       const entityId = process.env.PEACH_HOSTED_ENTITY_ID || process.env.PEACH_ENTITY_ID;
       const accessToken = process.env.PEACH_HOSTED_ACCESS_TOKEN || process.env.PEACH_ACCESS_TOKEN;
       if (!entityId || !accessToken) return { success: false, error: 'Missing Peach hosted credentials' };
-      const statusUrl = `${peachEndpoint}/v1/checkouts/${encodeURIComponent(reference)}/payment?entityId=${encodeURIComponent(entityId)}`;
-      const statusResp = await axios.get(statusUrl, { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 15000, validateStatus: () => true });
+      
+      const authHeader = Buffer.from(`${entityId}:${accessToken}`).toString('base64');
+      const statusUrl = `${peachEndpoint}/v1/checkouts/${encodeURIComponent(reference)}/payment`;
+      const statusResp = await axios.get(statusUrl, { 
+        headers: { Authorization: `Basic ${authHeader}` }, 
+        timeout: 15000, 
+        validateStatus: () => true 
+      });
       const code = statusResp.data?.result?.code || statusResp.data?.resultCode || statusResp.data?.result;
       const isPaid = typeof code === 'string' && (code.startsWith('000.000') || code.startsWith('000.100'));
       if (!isPaid) return { success: false, error: `Payment status not paid (code=${code || 'unknown'})` };
