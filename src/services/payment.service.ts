@@ -113,8 +113,16 @@ export class PaymentService {
         });
 
         const ref = initResp.data?.reference || initResp.data?.id || initResp.data?.checkoutId;
-        // Build hosted payment page URL with entityId in query (required by COPYandPAY)
-        const hostedUrl = ref ? `${peachEndpoint}/v1/checkouts/${encodeURIComponent(ref)}/payment?entityId=${encodeURIComponent(entityId)}` : undefined;
+        // Build hosted payment page URL - prefer custom hosted page if configured
+        let hostedUrl: string | undefined;
+        if (ref) {
+          const customPaymentPage = (process.env.PEACH_PAYMENT_PAGE_URL || '').trim();
+          if (customPaymentPage && (customPaymentPage.includes('sandbox-page.peachpayments.com') || customPaymentPage.includes('page.peachpayments.com'))) {
+            hostedUrl = `${customPaymentPage}?checkoutId=${encodeURIComponent(ref)}&entityId=${encodeURIComponent(entityId)}`;
+          } else {
+            hostedUrl = `${peachEndpoint}/v1/checkouts/${encodeURIComponent(ref)}/payment?entityId=${encodeURIComponent(entityId)}`;
+          }
+        }
         if (!ref || !hostedUrl) throw new Error('Failed to create Peach checkout');
 
         await this.db.query(
