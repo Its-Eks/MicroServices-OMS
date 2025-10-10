@@ -141,6 +141,11 @@ export class DatabaseService {
     }
   }
 
+  // Getter for PostgreSQL pool (for analytics services)
+  get pool(): Pool {
+    return this.pgPool;
+  }
+
   // PostgreSQL methods
   async query(text: string, params?: any[]): Promise<any> {
     if (!this.isConnected) {

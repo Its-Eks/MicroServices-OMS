@@ -464,21 +464,18 @@ export class OnboardingController {
   // Analytics Endpoints
   private async getOnboardingAnalytics(req: Request, res: Response): Promise<void> {
     try {
-      // This would typically query the database for analytics
-      // For now, returning mock data
-      const analytics = {
-        totalOnboardings: 150,
-        activeOnboardings: 25,
-        completedOnboardings: 120,
-        trialCustomers: 35,
-        conversionRate: 68.5,
-        averageCompletionTime: 8.2,
-        completionRate: 94.2
-      };
+      const { OnboardingAnalyticsService } = await import('../services/analytics.service.js');
+      const analyticsService = new OnboardingAnalyticsService(this.onboardingService.dbService);
+      
+      // Build filters from query parameters
+      const filters = this.buildAnalyticsFilters(req.query);
+      const analytics = await analyticsService.getOnboardingAnalytics(filters);
 
       res.json({
         success: true,
-        data: analytics
+        data: analytics,
+        filters,
+        generatedAt: new Date().toISOString()
       });
     } catch (error: any) {
       console.error('Error getting onboarding analytics:', error);
@@ -490,6 +487,45 @@ export class OnboardingController {
         }
       });
     }
+  }
+
+  private buildAnalyticsFilters(query: any): any {
+    const filters: any = {};
+
+    if (query.startDate && query.endDate) {
+      filters.dateRange = {
+        start: query.startDate,
+        end: query.endDate
+      };
+    }
+
+    if (query.onboardingTypes) {
+      filters.onboardingTypes = Array.isArray(query.onboardingTypes) 
+        ? query.onboardingTypes 
+        : [query.onboardingTypes];
+    }
+
+    if (query.customerTypes) {
+      filters.customerTypes = Array.isArray(query.customerTypes) 
+        ? query.customerTypes 
+        : [query.customerTypes];
+    }
+
+    if (query.assignedUsers) {
+      filters.assignedUsers = Array.isArray(query.assignedUsers) 
+        ? query.assignedUsers 
+        : [query.assignedUsers];
+    }
+
+    if (query.steps) {
+      filters.steps = Array.isArray(query.steps) ? query.steps : [query.steps];
+    }
+
+    if (query.granularity) {
+      filters.granularity = query.granularity;
+    }
+
+    return filters;
   }
 
   // Webhook Handlers

@@ -125,7 +125,7 @@ export class OnboardingService {
   ];
 
   constructor(
-    private dbService: DatabaseService,
+    public dbService: DatabaseService,
     private queueService: QueueService
   ) {}
 
