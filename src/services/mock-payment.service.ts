@@ -39,7 +39,19 @@ export class MockPaymentService {
       // Generate mock checkout ID and URL
       const checkoutId = `mock_checkout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const peachCheckoutId = `mock_peach_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-      const paymentUrl = `http://localhost:3004/api/payments/mock-checkout/${checkoutId}`;
+      
+      // Use custom payment page with pre-filled data
+      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+      const amountZAR = (totalAmount / 100).toFixed(2);
+      const params = new URLSearchParams({
+        amount: amountZAR,
+        email: request.customerEmail,
+        reference: request.orderId,
+        orderId: request.orderId,
+        checkoutId: peachCheckoutId,
+        entityId: 'mock_entity_id'
+      });
+      const paymentUrl = `${clientUrl}/payment?${params.toString()}`;
 
       // Store payment link in database (same as real service)
       await this.db.query(

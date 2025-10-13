@@ -124,9 +124,9 @@ export class OnboardingController {
         console.warn('DB create failed, falling back to in-memory store:', dbError?.message || dbError);
       }
 
-      // Fallback: in-memory
+      // Fallback: in-memory with proper UUID
       const fallbackCustomer = {
-        id: `cust_${Date.now()}`,
+        id: require('crypto').randomUUID(),
         customer_number: `CUST-${Math.floor(Math.random() * 100000).toString().padStart(5, '0')}`,
         ...createReq,
         created_at: new Date().toISOString(),

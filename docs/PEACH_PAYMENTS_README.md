@@ -38,7 +38,7 @@ POST `${PEACH_ENDPOINT}/v1/checkouts?entityId=${PEACH_HOSTED_ENTITY_ID}` with JS
 ```
 {
   "amount": "10.00",
-  "currency": "ZAR",
+    "currency": "ZAR",
   "paymentType": "DB",
   "merchantTransactionId": "<orderId>",
   "successUrl": ".../payment/success?ref={reference}",

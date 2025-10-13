@@ -95,7 +95,7 @@ Body:
 ```json
 {
   "orderId": "uuid",
-  "customerId": "uuid",
+  "customerId": "uuid", 
   "customerEmail": "customer@example.com",
   "customerName": "John Doe",
   "orderType": "new_install",
@@ -108,7 +108,7 @@ Body:
   },
   "serviceAddress": {
     "street": "123 Main Street",
-    "city": "Cape Town",
+    "city": "Cape Town", 
     "province": "Western Cape",
     "postalCode": "8001"
   }

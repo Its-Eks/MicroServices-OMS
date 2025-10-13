@@ -190,10 +190,10 @@ export class OnboardingService {
 
       const result = await this.dbService.query(
         `INSERT INTO customers (
-           customer_number, first_name, last_name, email, phone, address,
+           id, customer_number, first_name, last_name, email, phone, address,
            customer_type, is_trial, trial_start_date, trial_end_date, created_at, updated_at
          ) VALUES (
-           $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, NOW(), NOW()
+           gen_random_uuid(), $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, NOW(), NOW()
          ) RETURNING 
            id, customer_number, first_name, last_name, email, phone, address,
            customer_type, is_trial, trial_start_date, trial_end_date, created_at, updated_at`,

@@ -113,15 +113,20 @@ export class PaymentService {
         });
 
         const ref = initResp.data?.reference || initResp.data?.id || initResp.data?.checkoutId;
-        // Build hosted payment page URL - prefer custom hosted page if configured
+        // Build hosted payment page URL - use our custom payment page with pre-filled data
         let hostedUrl: string | undefined;
         if (ref) {
-          const customPaymentPage = (process.env.PEACH_PAYMENT_PAGE_URL || '').trim();
-          if (customPaymentPage && (customPaymentPage.includes('sandbox-page.peachpayments.com') || customPaymentPage.includes('page.peachpayments.com'))) {
-            hostedUrl = `${customPaymentPage}?checkoutId=${encodeURIComponent(ref)}&entityId=${encodeURIComponent(entityId)}`;
-          } else {
-            hostedUrl = `${peachEndpoint}/v1/checkouts/${encodeURIComponent(ref)}/payment?entityId=${encodeURIComponent(entityId)}`;
-          }
+          const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+          // Create URL with pre-filled payment data
+          const params = new URLSearchParams({
+            amount: amountZAR,
+            email: request.customerEmail,
+            reference: request.orderId,
+            orderId: request.orderId,
+            checkoutId: ref,
+            entityId: entityId
+          });
+          hostedUrl = `${clientUrl}/payment?${params.toString()}`;
         }
         if (!ref || !hostedUrl) throw new Error('Failed to create Peach checkout');
 
