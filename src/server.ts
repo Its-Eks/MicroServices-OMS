@@ -66,7 +66,14 @@ class OnboardingServer {
     
     // CORS configuration
     this.app.use(cors({
-      origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'],
+      origin: process.env.CORS_ORIGIN?.split(',') || [
+        'http://localhost:3000', 
+        'http://localhost:3001', 
+        'http://localhost:5173',
+        'https://oms-client-01ry.onrender.com',
+        'https://oms-server-ntlv.onrender.com',
+        'https://microservices-oms.onrender.com'
+      ],
       credentials: true
     }));
     this.app.use(compression());

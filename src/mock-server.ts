@@ -32,7 +32,12 @@ class MockOnboardingServer {
     
     // CORS middleware
     this.app.use(cors({
-      origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
+      origin: process.env.CORS_ORIGIN?.split(',') || [
+        'http://localhost:3000',
+        'https://oms-client-01ry.onrender.com',
+        'https://oms-server-ntlv.onrender.com',
+        'https://microservices-oms.onrender.com'
+      ],
       credentials: true
     }));
 
