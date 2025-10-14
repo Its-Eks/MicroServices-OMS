@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 
 export interface PaymentRequest {
   orderId: string;
+  orderNumber?: string; // Add order number for shorter reference
   customerId: string;
   customerEmail: string;
   customerName: string;
@@ -93,7 +94,7 @@ export class PaymentService {
           amount: amountZAR,
           currency: 'ZAR',
           paymentType: 'DB',
-          merchantTransactionId: request.orderId,
+          merchantTransactionId: request.orderNumber || `REF-${Math.floor(Math.random() * 100000).toString().padStart(5, '0')}`, // Use REF-XXXXX format
           customer: {
             email: request.customerEmail,
             givenName: request.customerName
@@ -121,7 +122,7 @@ export class PaymentService {
           const params = new URLSearchParams({
             amount: amountZAR,
             email: request.customerEmail,
-            reference: request.orderId,
+            reference: ref, // Use Peach Payments reference for customer display
             orderId: request.orderId,
             checkoutId: ref,
             entityId: entityId

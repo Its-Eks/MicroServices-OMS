@@ -46,7 +46,7 @@ export class MockPaymentService {
       const params = new URLSearchParams({
         amount: amountZAR,
         email: request.customerEmail,
-        reference: request.orderId,
+        reference: peachCheckoutId, // Use mock Peach reference for customer display
         orderId: request.orderId,
         checkoutId: peachCheckoutId,
         entityId: 'mock_entity_id'
