@@ -87,24 +87,14 @@ export class PaymentService {
         const amountZAR = (totalAmount / 100).toFixed(2);
         const checkoutId = `peach_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Create checkout (Bearer auth) with entityId in query string
+        // Create minimal checkout (no customer/billing data to avoid editable fields)
         const createUrl = `${peachEndpoint}/v1/checkouts?entityId=${encodeURIComponent(entityId)}`;
         const initResp = await axios.post(createUrl, {
           amount: amountZAR,
           currency: 'ZAR',
           paymentType: 'DB',
           merchantTransactionId: request.orderId,
-          customer: {
-            email: request.customerEmail,
-            givenName: request.customerName
-          },
-          billing: {
-            street1: request.serviceAddress.street,
-            city: request.serviceAddress.city,
-            state: request.serviceAddress.province,
-            postcode: request.serviceAddress.postalCode,
-            country: 'ZA'
-          },
+          // Remove customer and billing data to minimize editable fields
           successUrl: `${successUrl}?ref={reference}`,
           cancelUrl: `${cancelUrl}?ref={reference}`
         }, {
