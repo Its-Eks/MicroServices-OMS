@@ -107,7 +107,6 @@ export class PaymentController {
     try {
       const paymentRequest: PaymentRequest = {
         orderId: req.body.orderId,
-        orderNumber: req.body.orderNumber, // Add order number from request
         customerId: req.body.customerId,
         customerEmail: req.body.customerEmail,
         customerName: req.body.customerName,
