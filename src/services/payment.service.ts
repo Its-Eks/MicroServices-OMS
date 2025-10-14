@@ -119,10 +119,12 @@ export class PaymentService {
         if (ref) {
           const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
           // Create URL with pre-filled payment data
+          // Use shorter reference format for customer display (Peach reference is too long)
+          const shortReference = request.orderNumber || `REF-${Math.floor(Math.random() * 100000).toString().padStart(5, '0')}`;
           const params = new URLSearchParams({
             amount: amountZAR,
             email: request.customerEmail,
-            reference: ref, // Use Peach Payments reference for customer display
+            reference: shortReference, // Use shorter REF-XXXXX format for customer display
             orderId: request.orderId,
             checkoutId: ref,
             entityId: entityId

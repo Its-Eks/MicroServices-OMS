@@ -43,10 +43,12 @@ export class MockPaymentService {
       // Use custom payment page with pre-filled data
       const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
       const amountZAR = (totalAmount / 100).toFixed(2);
+      // Use shorter reference format for customer display
+      const shortReference = request.orderNumber || `REF-${Math.floor(Math.random() * 100000).toString().padStart(5, '0')}`;
       const params = new URLSearchParams({
         amount: amountZAR,
         email: request.customerEmail,
-        reference: peachCheckoutId, // Use mock Peach reference for customer display
+        reference: shortReference, // Use shorter REF-XXXXX format for customer display
         orderId: request.orderId,
         checkoutId: peachCheckoutId,
         entityId: 'mock_entity_id'
