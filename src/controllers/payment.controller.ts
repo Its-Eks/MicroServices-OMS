@@ -52,6 +52,9 @@ export class PaymentController {
     // Resend payment email
     this.router.post('/:paymentLinkId/resend', this.resendPaymentEmail.bind(this));
     
+    // Peach Payments redirect with authentication
+    this.router.get('/peach-redirect/:checkoutId/:entityId', this.redirectToPeachPayment.bind(this));
+    
     // Mock checkout page is handled directly in server.ts to bypass authentication
   }
 
@@ -284,6 +287,48 @@ export class PaymentController {
     } catch (error: any) {
       console.error('[PaymentController] Mock checkout page failed:', error);
       res.status(500).send('<h1>Error loading mock checkout page</h1>');
+    }
+  }
+
+  // Peach Payments redirect with authentication
+  public async redirectToPeachPayment(req: Request, res: Response): Promise<void> {
+    try {
+      const { checkoutId, entityId } = req.params;
+      
+      if (!checkoutId || !entityId) {
+        res.status(400).json({ 
+          success: false, 
+          error: { message: 'Missing checkoutId or entityId' } 
+        });
+        return;
+      }
+
+      const peachEndpoint = process.env.PEACH_ENDPOINT || 'https://card.peachpayments.com';
+      const accessToken = process.env.PEACH_HOSTED_ACCESS_TOKEN || process.env.PEACH_ACCESS_TOKEN;
+      
+      if (!accessToken) {
+        res.status(500).json({ 
+          success: false, 
+          error: { message: 'Peach Payments not configured' } 
+        });
+        return;
+      }
+
+      // Build the payment URL
+      const paymentUrl = `${peachEndpoint}/v1/checkouts/${checkoutId}/payment?entityId=${encodeURIComponent(entityId)}`;
+      
+      console.log(`[PaymentController] Redirecting to Peach Payments: ${paymentUrl}`);
+      
+      // For Peach Payments, we need to redirect directly to the payment URL
+      // The authentication is handled by Peach's hosted checkout system
+      res.redirect(paymentUrl);
+
+    } catch (error: any) {
+      console.error('[PaymentController] Peach redirect error:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: { message: 'Failed to redirect to payment' } 
+      });
     }
   }
 }

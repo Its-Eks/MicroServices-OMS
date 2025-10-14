@@ -1,0 +1,40 @@
+# Azure Container App Configuration
+apiVersion: apps/v1
+kind: ContainerApp
+metadata:
+  name: onboarding-service
+  namespace: default
+spec:
+  configuration:
+    ingress:
+      external: true
+      targetPort: 3004
+      allowInsecure: false
+    secrets:
+      - name: database-url
+        value: "your-postgresql-connection-string"
+      - name: redis-url
+        value: "your-redis-connection-string"
+      - name: cors-origin
+        value: "https://oms-client-01ry.onrender.com,https://oms-server-ntlv.onrender.com"
+  template:
+    containers:
+      - name: onboarding-service
+        image: your-registry.azurecr.io/onboarding-service:latest
+        env:
+          - name: PORT
+            value: "3004"
+          - name: NODE_ENV
+            value: "production"
+          - name: DATABASE_URL
+            secretRef: database-url
+          - name: REDIS_URL
+            secretRef: redis-url
+          - name: CORS_ORIGIN
+            secretRef: cors-origin
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+    scale:
+      minReplicas: 1
+      maxReplicas: 10
