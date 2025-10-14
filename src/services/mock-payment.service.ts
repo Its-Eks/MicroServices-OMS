@@ -51,7 +51,9 @@ export class MockPaymentService {
         reference: shortReference, // Use shorter REF-XXXXX format for customer display
         orderId: request.orderId,
         checkoutId: peachCheckoutId,
-        entityId: 'mock_entity_id'
+        entityId: 'mock_entity_id',
+        readonly: 'true', // Make form fields readonly
+        disabled: 'true'  // Additional readonly parameter
       });
       const paymentUrl = `${clientUrl}/payment?${params.toString()}`;
 
