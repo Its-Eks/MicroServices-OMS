@@ -127,9 +127,7 @@ export class PaymentService {
             reference: shortReference, // Use shorter REF-XXXXX format for customer display
             orderId: request.orderId,
             checkoutId: ref,
-            entityId: entityId,
-            readonly: 'true', // Make form fields readonly
-            disabled: 'true'  // Additional readonly parameter
+            entityId: entityId
           });
           hostedUrl = `${clientUrl}/payment?${params.toString()}`;
         }
