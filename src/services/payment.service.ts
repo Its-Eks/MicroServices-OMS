@@ -38,6 +38,8 @@ export class PaymentService {
   private emailTransporter: nodemailer.Transporter;
   private db: Pool;
   private provider: 'stripe' | 'peach';
+  private accessToken: string | null = null;
+  private tokenExpiry: number = 0;
 
   constructor(db: Pool, provider: 'stripe' | 'peach' = (process.env.PAYMENT_PROVIDER === 'peach' ? 'peach' : 'stripe')) {
     this.db = db;
@@ -66,6 +68,60 @@ export class PaymentService {
     });
   }
 
+  /**
+   * Get OAuth token for Peach Payments Payment Links API
+   * Caches token and refreshes when expired
+   */
+  private async getOAuthToken(): Promise<string> {
+    // Check if cached token is still valid (with 60s buffer)
+    const now = Date.now();
+    if (this.accessToken && this.tokenExpiry > now + 60000) {
+      return this.accessToken;
+    }
+
+    // Get OAuth credentials from environment
+    const clientId = process.env.PEACHPAYMENTS_USERNAME;
+    const clientSecret = process.env.PEACHPAYMENTS_PASSWORD;
+    const merchantId = process.env.PEACHPAYMENTS_MERCHANT_ID;
+    
+    if (!clientId || !clientSecret || !merchantId) {
+      throw new Error('Missing Peach Payments OAuth credentials: PEACHPAYMENTS_USERNAME, PEACHPAYMENTS_PASSWORD, and PEACHPAYMENTS_MERCHANT_ID are required');
+    }
+
+    // Determine OAuth endpoint (sandbox vs production)
+    const isSandbox = process.env.PEACHPAYMENTS_LINKS_BASE_URL?.includes('sandbox');
+    const oauthEndpoint = isSandbox 
+      ? 'https://sandbox-dashboard.peachpayments.com/api/oauth/token'
+      : 'https://dashboard.peachpayments.com/api/oauth/token';
+
+    try {
+      console.log('[PaymentService] Requesting OAuth token from Peach Payments...');
+      const response = await axios.post(oauthEndpoint, {
+        clientId,
+        clientSecret,
+        merchantId
+      }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000
+      });
+
+      const { access_token, expires_in } = response.data;
+      if (!access_token) {
+        throw new Error('No access token in OAuth response');
+      }
+
+      // Cache token and expiry time
+      this.accessToken = access_token;
+      this.tokenExpiry = now + (expires_in * 1000); // expires_in is in seconds
+      
+      console.log('[PaymentService] OAuth token obtained successfully, expires in:', expires_in, 'seconds');
+      return access_token;
+    } catch (error: any) {
+      console.error('[PaymentService] OAuth token request failed:', error?.response?.data || error?.message);
+      throw new Error(`Failed to obtain Peach Payments OAuth token: ${error?.response?.data?.message || error?.message || 'Unknown error'}`);
+    }
+  }
+
   async createPaymentLink(request: PaymentRequest): Promise<PaymentLink> {
     try {
       // Calculate total amount (service + installation) in cents
@@ -77,59 +133,95 @@ export class PaymentService {
       const cancelUrl = process.env.CANCEL_URL || `${process.env.CLIENT_URL || 'http://localhost:5173'}/payment/cancelled`;
 
       if (this.provider === 'peach') {
-        // Peach COPYandPAY (Hosted Checkout)
-        const peachEndpoint = (process.env.PEACH_ENDPOINT || 'https://sandbox-card.peachpayments.com').replace(/\/+$/g, '');
-        const entityId = process.env.PEACH_HOSTED_ENTITY_ID || process.env.PEACH_ENTITY_ID;
-        const accessToken = process.env.PEACH_HOSTED_ACCESS_TOKEN || process.env.PEACH_ACCESS_TOKEN;
-        if (!entityId) throw new Error('PEACH_HOSTED_ENTITY_ID is required');
-        if (!accessToken) throw new Error('PEACH_HOSTED_ACCESS_TOKEN is required');
+        // Peach Payment Links API
+        const entityId = process.env.PEACHPAYMENTS_ENTITY_ID;
+        const linksBaseUrl = process.env.PEACHPAYMENTS_LINKS_BASE_URL || 'https://links.peachpayments.com';
+        const baseUrl = process.env.BASE_URL || 'https://microservices-oms.onrender.com';
+        
+        if (!entityId) {
+          throw new Error('PEACHPAYMENTS_ENTITY_ID is required for Payment Links');
+        }
+
+        // Get OAuth access token
+        const accessToken = await this.getOAuthToken();
 
         const amountZAR = (totalAmount / 100).toFixed(2);
-        const checkoutId = `peach_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const checkoutId = `peach_link_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Create minimal checkout (no customer/billing data to avoid editable fields)
-        const createUrl = `${peachEndpoint}/v1/checkouts?entityId=${encodeURIComponent(entityId)}`;
-        const initResp = await axios.post(createUrl, {
+        // Parse customer name into given name and surname
+        const nameParts = request.customerName.trim().split(/\s+/);
+        const givenName = nameParts[0] || 'Customer';
+        const surname = nameParts.slice(1).join(' ') || 'User';
+
+        // Create Payment Link using Channels API
+        const createUrl = `${linksBaseUrl}/api/channels/${encodeURIComponent(entityId)}/payments`;
+        console.log('[PaymentService] Creating Payment Link:', {
+          url: createUrl,
           amount: amountZAR,
-          currency: 'ZAR',
-          paymentType: 'DB',
-          merchantTransactionId: request.orderId,
-          // Remove customer and billing data to minimize editable fields
-          successUrl: `${successUrl}?ref={reference}`,
-          cancelUrl: `${cancelUrl}?ref={reference}`
+          merchantInvoiceId: request.orderId
+        });
+
+        const paymentLinkResp = await axios.post(createUrl, {
+          payment: {
+            amount: parseFloat(amountZAR),
+            currency: 'ZAR',
+            merchantInvoiceId: request.orderId
+          },
+          customer: {
+            email: request.customerEmail,
+            givenName,
+            surname
+          },
+          checkout: {},
+          options: {
+            notificationUrl: `${baseUrl}/api/payments/webhook`
+          }
         }, {
-          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
           timeout: 20000
         });
 
-        const ref = initResp.data?.reference || initResp.data?.id || initResp.data?.checkoutId;
-        // Build hosted payment page URL - use our custom payment page with pre-filled data
-        let hostedUrl: string | undefined;
-        if (ref) {
-          const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-          // Create URL with pre-filled payment data
-          const params = new URLSearchParams({
-            amount: amountZAR,
-            email: request.customerEmail,
-            reference: request.orderId,
-            orderId: request.orderId,
-            checkoutId: ref,
-            entityId: entityId
-          });
-          hostedUrl = `${clientUrl}/payment?${params.toString()}`;
-        }
-        if (!ref || !hostedUrl) throw new Error('Failed to create Peach checkout');
+        const paymentLinkId = paymentLinkResp.data?.id;
+        const paymentLinkUrl = paymentLinkResp.data?.url;
 
+        if (!paymentLinkId || !paymentLinkUrl) {
+          console.error('[PaymentService] Invalid Payment Link response:', paymentLinkResp.data);
+          throw new Error('Failed to create Peach Payment Link - missing id or url');
+        }
+
+        console.log('[PaymentService] Payment Link created successfully:', {
+          id: paymentLinkId,
+          url: paymentLinkUrl
+        });
+
+        // Build our custom payment page URL with payment link embedded
+        const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+        const params = new URLSearchParams({
+          amount: amountZAR,
+          email: request.customerEmail,
+          reference: request.orderId,
+          orderId: request.orderId,
+          paymentLinkUrl: paymentLinkUrl,
+          paymentLinkId: paymentLinkId
+        });
+        const customPageUrl = `${clientUrl}/payment?${params.toString()}`;
+
+        // Store payment link in database
         await this.db.query(
-          `INSERT INTO payment_links (id, order_id, customer_id, peach_checkout_id, stripe_session_id, url, amount_cents, currency, status, expires_at, customer_email, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+          `INSERT INTO payment_links (id, order_id, customer_id, peach_checkout_id, stripe_session_id, url, payment_link_url, amount_cents, currency, status, expires_at, customer_email, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
           [
             checkoutId,
             request.orderId,
             request.customerId,
-            ref,
+            paymentLinkId,
             null,
-            hostedUrl,
+            customPageUrl,
+            paymentLinkUrl,
             totalAmount,
             'ZAR',
             'pending',
@@ -140,8 +232,8 @@ export class PaymentService {
 
         return {
           id: checkoutId,
-          url: hostedUrl,
-          checkoutId: ref,
+          url: customPageUrl,
+          checkoutId: paymentLinkId,
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
         };
       }
@@ -631,31 +723,118 @@ Need help? Contact us at support@xnext.co.za
     }
   }
 
-  // Peach: webhook handler with HMAC verification (headers and body)
+  // Peach Payment Links: webhook handler with HMAC verification
   async handlePeachWebhook(body: any, headers: Record<string, any>): Promise<void> {
-    if (this.provider !== 'peach') throw new Error('Peach webhook called when provider is not peach');
-    // NOTE: HMAC details depend on Peach configuration; placeholder verification structure
-    const signatureHeader = headers['x-peach-signature'] || headers['x-oppwa-signature'] || headers['x-hmac-signature'];
-    const secret = process.env.PEACH_WEBHOOK_SECRET;
-    if (secret && signatureHeader) {
-      const computed = crypto.createHmac('sha256', secret).update(typeof body === 'string' ? body : JSON.stringify(body)).digest('hex');
-      if (computed !== signatureHeader) {
-        throw new Error('Invalid Peach webhook signature');
-      }
+    if (this.provider !== 'peach') {
+      throw new Error('Peach webhook called when provider is not peach');
     }
-    const ref = body?.reference || body?.id || body?.checkoutId || body?.ndc;
-    const code = body?.result?.code || body?.resultCode || body?.result;
-    if (!ref) return;
-    // Map result codes to status
-    const isPaid = typeof code === 'string' && (code.startsWith('000.000') || code.startsWith('000.100'));
-    if (isPaid) {
-      // Find order by reference
-      const res = await this.db.query('SELECT order_id FROM payment_links WHERE peach_checkout_id = $1', [ref]);
-      if (res.rows.length === 0) return;
-      const orderId = res.rows[0].order_id as string;
-      await this.db.query(`UPDATE payment_links SET status = 'paid', paid_at = COALESCE(paid_at, NOW()) WHERE peach_checkout_id = $1`, [ref]);
-      await this.db.query(`UPDATE orders SET is_paid = TRUE, status = 'payment_received', paid_at = COALESCE(paid_at, NOW()), updated_at = NOW() WHERE id = $1`, [orderId]);
-      await this.notifyOms(orderId, { peachReference: ref });
+
+    console.log('[PaymentService] Processing Peach Payment Links webhook');
+
+    // Verify webhook signature using HMAC SHA256
+    const signatureHeader = headers['x-peach-signature'] || headers['x-webhook-signature'];
+    const secret = process.env.PEACHPAYMENTS_WEBHOOK_SECRET;
+    
+    if (secret && signatureHeader) {
+      const rawBody = typeof body === 'string' ? body : JSON.stringify(body);
+      const computed = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      
+      if (computed !== signatureHeader) {
+        console.error('[PaymentService] Invalid webhook signature');
+        throw new Error('Invalid Peach Payment Links webhook signature');
+      }
+      console.log('[PaymentService] Webhook signature verified');
+    } else if (secret) {
+      console.warn('[PaymentService] Webhook secret configured but no signature header found');
+    }
+
+    // Parse Payment Links webhook payload
+    const paymentId = body?.payment?.id || body?.id;
+    const paymentStatus = body?.payment?.status || body?.status;
+    const merchantInvoiceId = body?.payment?.merchantInvoiceId || body?.merchantInvoiceId;
+
+    console.log('[PaymentService] Webhook data:', {
+      paymentId,
+      paymentStatus,
+      merchantInvoiceId
+    });
+
+    if (!paymentId) {
+      console.warn('[PaymentService] Webhook received without payment ID');
+      return;
+    }
+
+    // Log webhook event
+    await this.db.query(
+      `INSERT INTO payment_webhook_events (peach_checkout_id, event_type, event_data, created_at)
+       VALUES ($1, $2, $3, NOW())`,
+      [paymentId, `payment_links_${paymentStatus}`, JSON.stringify(body)]
+    );
+
+    // Map Payment Links status to internal status
+    let internalStatus = 'pending';
+    if (paymentStatus === 'SUCCESSFUL') {
+      internalStatus = 'paid';
+    } else if (paymentStatus === 'FAILED') {
+      internalStatus = 'failed';
+    } else if (paymentStatus === 'PENDING') {
+      internalStatus = 'pending';
+    }
+
+    // Find payment by Payment Link ID or merchant invoice ID (orderId)
+    let paymentQuery;
+    if (merchantInvoiceId) {
+      paymentQuery = await this.db.query(
+        'SELECT * FROM payment_links WHERE order_id = $1',
+        [merchantInvoiceId]
+      );
+    } else {
+      paymentQuery = await this.db.query(
+        'SELECT * FROM payment_links WHERE peach_checkout_id = $1',
+        [paymentId]
+      );
+    }
+
+    if (paymentQuery.rows.length === 0) {
+      console.warn('[PaymentService] Payment not found for webhook:', { paymentId, merchantInvoiceId });
+      return;
+    }
+
+    const payment = paymentQuery.rows[0];
+    const orderId = payment.order_id;
+
+    // Update payment status
+    await this.db.query(
+      `UPDATE payment_links 
+       SET status = $1, paid_at = CASE WHEN $1 = 'paid' THEN COALESCE(paid_at, NOW()) ELSE paid_at END, updated_at = NOW()
+       WHERE peach_checkout_id = $2`,
+      [internalStatus, paymentId]
+    );
+
+    // If successful, update order and notify OMS
+    if (paymentStatus === 'SUCCESSFUL') {
+      console.log('[PaymentService] Payment successful, updating order:', orderId);
+      
+      await this.db.query(
+        `UPDATE orders 
+         SET is_paid = TRUE, status = 'payment_received', paid_at = COALESCE(paid_at, NOW()), updated_at = NOW()
+         WHERE id = $1`,
+        [orderId]
+      );
+
+      await this.notifyOms(orderId, { 
+        peachPaymentLinkId: paymentId,
+        merchantInvoiceId 
+      });
+
+      console.log('[PaymentService] Order updated and OMS notified for:', orderId);
+    } else if (paymentStatus === 'FAILED') {
+      console.log('[PaymentService] Payment failed for order:', orderId);
+      
+      await this.db.query(
+        `UPDATE orders SET status = 'payment_failed', updated_at = NOW() WHERE id = $1`,
+        [orderId]
+      );
     }
   }
 
@@ -716,41 +895,53 @@ Need help? Contact us at support@xnext.co.za
     }
   }
 
-  // Peach: confirm by reference
+  // Peach Payment Links: confirm by reference (database-only, webhooks handle actual updates)
   async confirmPeachReference(reference: string): Promise<{ success: boolean; orderId?: string; error?: string }> {
     try {
-      if (this.provider !== 'peach') return { success: false, error: 'Peach confirmation disabled' };
-      if (!reference) return { success: false, error: 'reference is required' };
-
-      const res = await this.db.query('SELECT order_id FROM payment_links WHERE peach_checkout_id = $1', [reference]);
-      let orderId: string | undefined = res.rows[0]?.order_id;
-
-      // Query Peach for final status
-      const peachEndpoint = (process.env.PEACH_ENDPOINT || 'https://sandbox-card.peachpayments.com').replace(/\/+$/g, '');
-      const entityId = process.env.PEACH_HOSTED_ENTITY_ID || process.env.PEACH_ENTITY_ID;
-      const accessToken = process.env.PEACH_HOSTED_ACCESS_TOKEN || process.env.PEACH_ACCESS_TOKEN;
-      if (!entityId || !accessToken) return { success: false, error: 'Missing Peach hosted credentials' };
-      
-      const statusUrl = `${peachEndpoint}/v1/checkouts/${encodeURIComponent(reference)}/payment?entityId=${encodeURIComponent(entityId)}`;
-      const statusResp = await axios.get(statusUrl, { 
-        headers: { Authorization: `Bearer ${accessToken}` }, 
-        timeout: 15000, 
-        validateStatus: () => true 
-      });
-      const code = statusResp.data?.result?.code || statusResp.data?.resultCode || statusResp.data?.result;
-      const isPaid = typeof code === 'string' && (code.startsWith('000.000') || code.startsWith('000.100'));
-      if (!isPaid) return { success: false, error: `Payment status not paid (code=${code || 'unknown'})` };
-
-      if (!orderId) {
-        // Fallback: attempt to read merchantTransactionId
-        orderId = statusResp.data?.merchantTransactionId || statusResp.data?.merchant?.transactionId;
+      if (this.provider !== 'peach') {
+        return { success: false, error: 'Peach confirmation disabled' };
       }
-      if (!orderId) return { success: false, error: 'Order not associated with reference' };
+      
+      if (!reference) {
+        return { success: false, error: 'reference is required' };
+      }
 
-      await this.db.query(`UPDATE payment_links SET status = 'paid', paid_at = COALESCE(paid_at, NOW()) WHERE peach_checkout_id = $1`, [reference]);
-      await this.db.query(`UPDATE orders SET is_paid = TRUE, status = 'payment_received', paid_at = COALESCE(paid_at, NOW()), updated_at = NOW() WHERE id = $1`, [orderId]);
-      await this.notifyOms(orderId, { peachReference: reference });
-      return { success: true, orderId };
+      console.log('[PaymentService] Confirming payment reference:', reference);
+
+      // Payment Links uses webhooks exclusively for status updates
+      // This method just checks the database status that was updated by webhook
+      const res = await this.db.query(
+        'SELECT order_id, status, paid_at FROM payment_links WHERE peach_checkout_id = $1',
+        [reference]
+      );
+
+      if (res.rows.length === 0) {
+        console.warn('[PaymentService] Payment link not found for reference:', reference);
+        return { success: false, error: 'Payment link not found' };
+      }
+
+      const paymentLink = res.rows[0];
+      const orderId = paymentLink.order_id;
+      const status = paymentLink.status;
+      const paidAt = paymentLink.paid_at;
+
+      console.log('[PaymentService] Payment status from database:', {
+        orderId,
+        status,
+        paidAt: paidAt ? paidAt.toISOString() : null
+      });
+
+      // Check if payment is marked as paid
+      if (status === 'paid' && paidAt) {
+        return { success: true, orderId };
+      }
+
+      // Payment not yet confirmed via webhook
+      return { 
+        success: false, 
+        error: `Payment not yet confirmed (status: ${status}). Webhook will update when payment completes.` 
+      };
+
     } catch (error: any) {
       console.error('[PaymentService] confirmPeachReference failed:', error);
       return { success: false, error: error.message || 'Failed to confirm reference' };
