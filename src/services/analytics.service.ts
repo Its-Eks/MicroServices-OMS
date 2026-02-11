@@ -1,4 +1,4 @@
-import { DatabaseService } from './database.service.js';
+import { DatabaseService } from './database.service';
 
 export interface OnboardingAnalytics {
   overview: OnboardingOverviewMetrics;
@@ -172,54 +172,14 @@ export class OnboardingAnalyticsService {
       stuckResult,
       expiringResult
     ] = await Promise.all([
-      this.db.query(`
-        SELECT COUNT(*)::int as count 
-        FROM onboarding_instances 
-        ${dateFilter}
-      `),
-      this.db.query(`
-        SELECT COUNT(*)::int as count 
-        FROM onboarding_instances 
-        WHERE current_step != 'completed' 
-        ${dateFilter}
-      `),
-      this.db.query(`
-        SELECT COUNT(*)::int as count 
-        FROM onboarding_instances 
-        WHERE current_step = 'completed' 
-        ${dateFilter}
-      `),
-      this.db.query(`
-        SELECT COUNT(*)::int as count 
-        FROM customers 
-        WHERE is_trial = true
-      `),
-      this.db.query(`
-        SELECT 
-          COUNT(*)::int as total,
-          COUNT(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN 1 END)::int as converted
-        FROM customers 
-        WHERE is_trial = true
-      `),
-      this.db.query(`
-        SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) as avg_days
-        FROM onboarding_instances 
-        WHERE current_step = 'completed' 
-        ${dateFilter}
-      `),
-      this.db.query(`
-        SELECT COUNT(*)::int as count
-        FROM onboarding_instances 
-        WHERE current_step != 'completed' 
-        AND updated_at < NOW() - INTERVAL '7 days'
-        ${dateFilter}
-      `),
-      this.db.query(`
-        SELECT COUNT(*)::int as count
-        FROM customers 
-        WHERE is_trial = true 
-        AND trial_end_date BETWEEN NOW() AND NOW() + INTERVAL '7 days'
-      `)
+      this.db.query(`SELECT COUNT(*)::int as count FROM onboarding_instances ${dateFilter}`),
+      this.db.query(`SELECT COUNT(*)::int as count FROM onboarding_instances WHERE current_step != 'completed' ${dateFilter}`),
+      this.db.query(`SELECT COUNT(*)::int as count FROM onboarding_instances WHERE current_step = 'completed' ${dateFilter}`),
+      this.db.query(`SELECT COUNT(*)::int as count FROM customers WHERE is_trial = true`),
+      this.db.query(`SELECT COUNT(*)::int as total, COUNT(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN 1 END)::int as converted FROM customers WHERE is_trial = true`),
+      this.db.query(`SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) as avg_days FROM onboarding_instances WHERE current_step = 'completed' ${dateFilter}`),
+      this.db.query(`SELECT COUNT(*)::int as count FROM onboarding_instances WHERE current_step != 'completed' AND updated_at < NOW() - INTERVAL '7 days' ${dateFilter}`),
+      this.db.query(`SELECT COUNT(*)::int as count FROM customers WHERE is_trial = true AND trial_end_date BETWEEN NOW() AND NOW() + INTERVAL '7 days'`)
     ]);
 
     const total = totalResult.rows[0]?.count || 0;
@@ -247,28 +207,8 @@ export class OnboardingAnalyticsService {
     const dateFilter = this.buildDateFilter(filters?.dateRange);
     
     const [trialResult, conversionTrend] = await Promise.all([
-      this.db.query(`
-        SELECT 
-          COUNT(*)::int as total,
-          COUNT(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN 1 END)::int as converted,
-          AVG(CASE 
-            WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() 
-            THEN EXTRACT(EPOCH FROM (trial_end_date - trial_start_date))/86400 
-          END) as avg_conversion_time
-        FROM customers 
-        WHERE is_trial = true
-      `),
-      this.db.query(`
-        SELECT 
-          DATE_TRUNC('day', trial_start_date) as date,
-          COUNT(*)::int as total,
-          COUNT(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN 1 END)::int as converted
-        FROM customers 
-        WHERE is_trial = true 
-        AND trial_start_date >= NOW() - INTERVAL '30 days'
-        GROUP BY DATE_TRUNC('day', trial_start_date)
-        ORDER BY date DESC
-      `)
+      this.db.query(`SELECT COUNT(*)::int as total, COUNT(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN 1 END)::int as converted, AVG(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN EXTRACT(EPOCH FROM (trial_end_date - trial_start_date))/86400 END) as avg_conversion_time FROM customers WHERE is_trial = true`),
+      this.db.query(`SELECT DATE_TRUNC('day', trial_start_date) as date, COUNT(*)::int as total, COUNT(CASE WHEN trial_end_date IS NOT NULL AND trial_end_date < NOW() THEN 1 END)::int as converted FROM customers WHERE is_trial = true AND trial_start_date >= NOW() - INTERVAL '30 days' GROUP BY DATE_TRUNC('day', trial_start_date) ORDER BY date DESC`)
     ]);
 
     const data = trialResult.rows[0];
@@ -283,8 +223,8 @@ export class OnboardingAnalyticsService {
       convertedTrials: converted,
       conversionRate: Math.round(conversionRate * 100) / 100,
       averageConversionTime: Math.round((data?.avg_conversion_time || 0) * 100) / 100,
-      conversionByCampaign: [], // Would be populated with campaign data
-      conversionTrend: conversionTrend.rows.map(row => ({
+      conversionByCampaign: [],
+      conversionTrend: conversionTrend.rows.map((row: any) => ({
         date: row.date.toISOString().split('T')[0],
         rate: row.total > 0 ? Math.round((row.converted / row.total) * 10000) / 100 : 0,
         count: row.total
@@ -297,52 +237,12 @@ export class OnboardingAnalyticsService {
     const dateFilter = this.buildDateFilter(filters?.dateRange);
     
     const [completionByType, stepTimes, bottleneckSteps] = await Promise.all([
-      this.db.query(`
-        SELECT 
-          onboarding_type,
-          COUNT(*)::int as total,
-          COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed,
-          AVG(CASE 
-            WHEN current_step = 'completed' 
-            THEN EXTRACT(EPOCH FROM (updated_at - created_at))/86400 
-          END) as avg_time
-        FROM onboarding_instances 
-        ${dateFilter}
-        GROUP BY onboarding_type
-      `),
-      this.db.query(`
-        SELECT 
-          current_step,
-          COUNT(*)::int as count,
-          AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) as avg_time
-        FROM onboarding_instances 
-        WHERE current_step != 'initiated'
-        ${dateFilter}
-        GROUP BY current_step
-        ORDER BY avg_time DESC
-      `),
-      this.db.query(`
-        SELECT 
-          current_step,
-          AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) as avg_time,
-          COUNT(*)::int as stuck_count
-        FROM onboarding_instances 
-        WHERE current_step != 'completed' 
-        AND updated_at < NOW() - INTERVAL '3 days'
-        ${dateFilter}
-        GROUP BY current_step
-        HAVING AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) > 2
-        ORDER BY avg_time DESC
-        LIMIT 5
-      `)
+      this.db.query(`SELECT onboarding_type, COUNT(*)::int as total, COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed, AVG(CASE WHEN current_step = 'completed' THEN EXTRACT(EPOCH FROM (updated_at - created_at))/86400 END) as avg_time FROM onboarding_instances ${dateFilter} GROUP BY onboarding_type`),
+      this.db.query(`SELECT current_step, COUNT(*)::int as count, AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) as avg_time FROM onboarding_instances WHERE current_step != 'initiated' ${dateFilter} GROUP BY current_step ORDER BY avg_time DESC`),
+      this.db.query(`SELECT current_step, AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) as avg_time, COUNT(*)::int as stuck_count FROM onboarding_instances WHERE current_step != 'completed' AND updated_at < NOW() - INTERVAL '3 days' ${dateFilter} GROUP BY current_step HAVING AVG(EXTRACT(EPOCH FROM (updated_at - created_at))/86400) > 2 ORDER BY avg_time DESC LIMIT 5`)
     ]);
 
-    const totalResult = await this.db.query(`
-      SELECT COUNT(*)::int as total,
-             COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed
-      FROM onboarding_instances 
-      ${dateFilter}
-    `);
+    const totalResult = await this.db.query(`SELECT COUNT(*)::int as total, COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed FROM onboarding_instances ${dateFilter}`);
     
     const total = totalResult.rows[0]?.total || 0;
     const completed = totalResult.rows[0]?.completed || 0;
@@ -350,19 +250,19 @@ export class OnboardingAnalyticsService {
 
     return {
       completionRate: Math.round(completionRate * 100) / 100,
-      averageCompletionTime: 0, // Would be calculated from completed onboardings
-      completionByType: completionByType.rows.map(row => ({
+      averageCompletionTime: 0,
+      completionByType: completionByType.rows.map((row: any) => ({
         type: row.onboarding_type || 'unknown',
         rate: row.total > 0 ? Math.round((row.completed / row.total) * 10000) / 100 : 0,
         avgTime: Math.round((row.avg_time || 0) * 100) / 100,
         count: row.total
       })),
-      stepCompletionTimes: stepTimes.rows.map(row => ({
+      stepCompletionTimes: stepTimes.rows.map((row: any) => ({
         step: row.current_step,
         avgTime: Math.round((row.avg_time || 0) * 100) / 100,
         count: row.count
       })),
-      bottleneckSteps: bottleneckSteps.rows.map(row => ({
+      bottleneckSteps: bottleneckSteps.rows.map((row: any) => ({
         step: row.current_step,
         avgTime: Math.round((row.avg_time || 0) * 100) / 100,
         stuckCount: row.stuck_count
@@ -371,7 +271,6 @@ export class OnboardingAnalyticsService {
   }
 
   private async getInsightsMetrics(filters?: OnboardingFilters): Promise<OnboardingInsightsMetrics> {
-    // Generate insights based on current data
     const insights = await this.generateInsights();
     const anomalies = await this.detectAnomalies();
     const opportunities = await this.identifyOpportunities();
@@ -387,46 +286,23 @@ export class OnboardingAnalyticsService {
     const dateFilter = this.buildDateFilter(filters?.dateRange);
     
     const [completionTrend, volumeTrend] = await Promise.all([
-      this.db.query(`
-        SELECT 
-          DATE_TRUNC('day', created_at) as date,
-          COUNT(*)::int as total,
-          COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed,
-          AVG(CASE 
-            WHEN current_step = 'completed' 
-            THEN EXTRACT(EPOCH FROM (updated_at - created_at))/86400 
-          END) as avg_time
-        FROM onboarding_instances 
-        WHERE created_at >= NOW() - INTERVAL '30 days'
-        GROUP BY DATE_TRUNC('day', created_at)
-        ORDER BY date DESC
-      `),
-      this.db.query(`
-        SELECT 
-          DATE_TRUNC('day', created_at) as date,
-          COUNT(*)::int as volume
-        FROM onboarding_instances 
-        WHERE created_at >= NOW() - INTERVAL '30 days'
-        GROUP BY DATE_TRUNC('day', created_at)
-        ORDER BY date DESC
-      `)
+      this.db.query(`SELECT DATE_TRUNC('day', created_at) as date, COUNT(*)::int as total, COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed, AVG(CASE WHEN current_step = 'completed' THEN EXTRACT(EPOCH FROM (updated_at - created_at))/86400 END) as avg_time FROM onboarding_instances WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY DATE_TRUNC('day', created_at) ORDER BY date DESC`),
+      this.db.query(`SELECT DATE_TRUNC('day', created_at) as date, COUNT(*)::int as volume FROM onboarding_instances WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY DATE_TRUNC('day', created_at) ORDER BY date DESC`)
     ]);
 
     return {
-      completionTrend: completionTrend.rows.map((row, index) => ({
+      completionTrend: completionTrend.rows.map((row: any, index: number) => ({
         date: row.date.toISOString().split('T')[0],
         rate: row.total > 0 ? Math.round((row.completed / row.total) * 10000) / 100 : 0,
         avgTime: Math.round((row.avg_time || 0) * 100) / 100,
         count: row.total
       })),
-      volumeTrend: volumeTrend.rows.map((row, index) => ({
+      volumeTrend: volumeTrend.rows.map((row: any, index: number) => ({
         date: row.date.toISOString().split('T')[0],
         volume: row.volume,
-        growth: index < volumeTrend.rows.length - 1 
-          ? Math.round(((row.volume - volumeTrend.rows[index + 1].volume) / volumeTrend.rows[index + 1].volume) * 10000) / 100
-          : 0
+        growth: index < volumeTrend.rows.length - 1 ? Math.round(((row.volume - volumeTrend.rows[index + 1].volume) / volumeTrend.rows[index + 1].volume) * 10000) / 100 : 0
       })),
-      stepTrends: [] // Would be populated with detailed step trends
+      stepTrends: []
     };
   }
 
@@ -436,19 +312,9 @@ export class OnboardingAnalyticsService {
     daysRemaining: number;
     engagement: number;
   }>> {
-    const result = await this.db.query(`
-      SELECT 
-        c.id,
-        CONCAT(c.first_name, ' ', c.last_name) as customer_name,
-        EXTRACT(EPOCH FROM (c.trial_end_date - NOW()))/86400 as days_remaining,
-        0 as engagement -- Would be calculated from actual engagement data
-      FROM customers c
-      WHERE c.is_trial = true 
-      AND c.trial_end_date BETWEEN NOW() AND NOW() + INTERVAL '7 days'
-      ORDER BY c.trial_end_date ASC
-    `);
+    const result = await this.db.query(`SELECT c.id, CONCAT(c.first_name, ' ', c.last_name) as customer_name, EXTRACT(EPOCH FROM (c.trial_end_date - NOW()))/86400 as days_remaining, 0 as engagement FROM customers c WHERE c.is_trial = true AND c.trial_end_date BETWEEN NOW() AND NOW() + INTERVAL '7 days' ORDER BY c.trial_end_date ASC`);
 
-    return result.rows.map(row => ({
+    return result.rows.map((row: any) => ({
       id: row.id,
       customerName: row.customer_name || 'Unknown',
       daysRemaining: Math.ceil(row.days_remaining || 0),
@@ -466,17 +332,18 @@ export class OnboardingAnalyticsService {
     actionable: boolean;
     recommendations: string[];
   }>> {
-    // Generate insights based on current data patterns
-    const insights = [];
+    const insights: Array<{
+      id: string;
+      title: string;
+      description: string;
+      impact: 'high' | 'medium' | 'low';
+      category: string;
+      confidence: number;
+      actionable: boolean;
+      recommendations: string[];
+    }> = [];
 
-    // Check completion rate
-    const completionResult = await this.db.query(`
-      SELECT 
-        COUNT(*)::int as total,
-        COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed
-      FROM onboarding_instances 
-      WHERE created_at >= NOW() - INTERVAL '30 days'
-    `);
+    const completionResult = await this.db.query(`SELECT COUNT(*)::int as total, COUNT(CASE WHEN current_step = 'completed' THEN 1 END)::int as completed FROM onboarding_instances WHERE created_at >= NOW() - INTERVAL '30 days'`);
     
     const total = completionResult.rows[0]?.total || 0;
     const completed = completionResult.rows[0]?.completed || 0;
@@ -522,15 +389,17 @@ export class OnboardingAnalyticsService {
     impact: string;
     recommendedAction: string;
   }>> {
-    const anomalies = [];
+    const anomalies: Array<{
+      id: string;
+      type: string;
+      description: string;
+      severity: 'critical' | 'warning' | 'info';
+      detectedAt: string;
+      impact: string;
+      recommendedAction: string;
+    }> = [];
 
-    // Check for stuck onboardings
-    const stuckResult = await this.db.query(`
-      SELECT COUNT(*)::int as count
-      FROM onboarding_instances 
-      WHERE current_step != 'completed' 
-      AND updated_at < NOW() - INTERVAL '7 days'
-    `);
+    const stuckResult = await this.db.query(`SELECT COUNT(*)::int as count FROM onboarding_instances WHERE current_step != 'completed' AND updated_at < NOW() - INTERVAL '7 days'`);
 
     const stuckCount = stuckResult.rows[0]?.count || 0;
     if (stuckCount > 10) {
@@ -557,15 +426,17 @@ export class OnboardingAnalyticsService {
     priority: number;
     timeline: string;
   }>> {
-    const opportunities = [];
+    const opportunities: Array<{
+      id: string;
+      title: string;
+      description: string;
+      potentialImpact: string;
+      effort: 'low' | 'medium' | 'high';
+      priority: number;
+      timeline: string;
+    }> = [];
 
-    // Check trial conversion opportunities
-    const trialResult = await this.db.query(`
-      SELECT COUNT(*)::int as count
-      FROM customers 
-      WHERE is_trial = true 
-      AND trial_end_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'
-    `);
+    const trialResult = await this.db.query(`SELECT COUNT(*)::int as count FROM customers WHERE is_trial = true AND trial_end_date BETWEEN NOW() AND NOW() + INTERVAL '3 days'`);
 
     const expiringCount = trialResult.rows[0]?.count || 0;
     if (expiringCount > 0) {

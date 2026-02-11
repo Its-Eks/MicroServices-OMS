@@ -1,6 +1,9 @@
+
 import { Request, Response, Router } from 'express';
-import { OnboardingService } from '../services/onboarding.service';
+import type { OnboardingService } from '../services/onboarding.service';
 import { SlaService } from '../services/sla.service';
+import { OnboardingAnalyticsService } from '../services/analytics.service';
+
 
 export class OnboardingController {
   private router: Router;
@@ -28,7 +31,9 @@ export class OnboardingController {
     this.router.post('/trials/:id/convert', this.convertTrialToCustomer.bind(this));
 
     // Analytics
-    this.router.get('/analytics/overview', this.getOnboardingAnalytics.bind(this));
+    this.router.get('/analytics/overview', async (req, res) => {
+      await this.getOnboardingAnalytics(req, res);
+    });
 
     // SLA endpoints (unified for orders and onboarding)
     this.router.get('/sla/order/:orderId', this.getOrderSla.bind(this));
@@ -57,6 +62,11 @@ export class OnboardingController {
       const data = await sla.getOrderSla(orderId);
       res.json({ success: true, data });
     } catch (error: any) {
+      console.error("=== FULL ERROR DEBUG ===");
+      console.error("Error name:", error.name);
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+      console.error("Error code:", error.code);
       res.status(500).json({ success: false, error: { message: error?.message || 'Failed to compute order SLA' } });
     }
   }
@@ -199,7 +209,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'ONBOARDING_INITIATION_FAILED'
         }
       });
@@ -243,7 +253,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'ONBOARDING_STATUS_FETCH_FAILED'
         }
       });
@@ -326,7 +336,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'CUSTOMER_ONBOARDING_FETCH_FAILED'
         }
       });
@@ -364,7 +374,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'ONBOARDING_STEP_UPDATE_FAILED'
         }
       });
@@ -397,7 +407,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'ONBOARDING_STEPS_FETCH_FAILED'
         }
       });
@@ -421,7 +431,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'TRIAL_CUSTOMERS_FETCH_FAILED'
         }
       });
@@ -454,17 +464,17 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'TRIAL_CONVERSION_FAILED'
         }
       });
     }
   }
 
-  // Analytics Endpoints
+    // Analytics Endpoints
+
   private async getOnboardingAnalytics(req: Request, res: Response): Promise<void> {
     try {
-      const { OnboardingAnalyticsService } = await import('../services/analytics.service.js');
       const analyticsService = new OnboardingAnalyticsService(this.onboardingService.dbService);
       
       // Build filters from query parameters
@@ -559,7 +569,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'EMAIL_WEBHOOK_PROCESSING_FAILED'
         }
       });
@@ -590,7 +600,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'SHIPPING_WEBHOOK_PROCESSING_FAILED'
         }
       });
@@ -635,7 +645,7 @@ export class OnboardingController {
       res.status(500).json({
         success: false,
         error: {
-          message: error.message || 'Internal server error',
+          message: error.message || 'INTERNAL_TEST_ERROR_12345',
           code: 'EQUIPMENT_WEBHOOK_PROCESSING_FAILED'
         }
       });

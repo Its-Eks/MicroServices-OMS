@@ -88,7 +88,7 @@ class PaymentServer {
         await this.db.query('SELECT 1');
         res.json({ status: 'healthy', database: 'connected' });
       } catch (error) {
-        res.status(503).json({ status: 'unhealthy', database: 'disconnected', error: error.message });
+        res.status(503).json({ status: 'unhealthy', database: 'disconnected', error: (error as any).message });
       }
     });
 
